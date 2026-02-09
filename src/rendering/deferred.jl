@@ -493,6 +493,9 @@ mutable struct DeferredPipeline
     # Screen-space ambient occlusion (optional)
     ssao_pass::Union{SSAOPass, Nothing}
 
+    # Temporal anti-aliasing (optional)
+    taa_pass::Union{TAAPass, Nothing}
+
     # Fullscreen quad for lighting pass
     quad_vao::GLuint
     quad_vbo::GLuint
@@ -500,6 +503,7 @@ mutable struct DeferredPipeline
     DeferredPipeline() = new(
         GBuffer(),
         Framebuffer(),
+        nothing,
         nothing,
         nothing,
         nothing,
@@ -576,6 +580,9 @@ function create_deferred_pipeline!(pipeline::DeferredPipeline, width::Int, heigh
     pipeline.ssao_pass = SSAOPass(width=width, height=height)
     create_ssao_pass!(pipeline.ssao_pass, width, height)
 
+    # Create TAA pass (optional, can be enabled/disabled)
+    pipeline.taa_pass = create_taa_pass!(width, height)
+
     @info "Created deferred pipeline" width=width height=height
 
     return nothing
@@ -620,6 +627,11 @@ function destroy_deferred_pipeline!(pipeline::DeferredPipeline)
         pipeline.ssao_pass = nothing
     end
 
+    if pipeline.taa_pass !== nothing
+        destroy_taa_pass!(pipeline.taa_pass)
+        pipeline.taa_pass = nothing
+    end
+
     return nothing
 end
 
@@ -638,5 +650,9 @@ function resize_deferred_pipeline!(pipeline::DeferredPipeline, width::Int, heigh
 
     if pipeline.ssao_pass !== nothing
         resize_ssao_pass!(pipeline.ssao_pass, width, height)
+    end
+
+    if pipeline.taa_pass !== nothing
+        resize_taa_pass!(pipeline.taa_pass, width, height)
     end
 end

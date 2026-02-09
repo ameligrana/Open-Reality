@@ -67,6 +67,7 @@ include("rendering/shader_variants.jl")
 include("rendering/ibl.jl")
 include("rendering/ssr.jl")
 include("rendering/ssao.jl")
+include("rendering/taa.jl")
 include("rendering/deferred.jl")
 include("rendering/post_processing.jl")
 include("rendering/shadow_map.jl")
@@ -155,6 +156,9 @@ export SSRPass, create_ssr_pass!, destroy_ssr_pass!, resize_ssr_pass!, render_ss
 
 # Export SSAO
 export SSAOPass, create_ssao_pass!, destroy_ssao_pass!, resize_ssao_pass!, render_ssao!, apply_ssao_to_lighting!
+
+# Export TAA
+export TAAPass, create_taa_pass!, destroy_taa_pass!, resize_taa_pass!, render_taa!, apply_taa_jitter!, get_halton_jitter
 
 # Export IBL
 export IBLEnvironment, create_ibl_environment!, destroy_ibl_environment!

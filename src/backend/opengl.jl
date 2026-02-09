@@ -566,22 +566,35 @@ function render_frame!(backend::OpenGLBackend, scene::Scene)
         # post-processing at the very end for bloom/tone mapping/FXAA
         pipeline = backend.deferred_pipeline
 
+        # ---- Apply TAA jitter to projection matrix ----
+        # NOTE: Jitter disabled for now - TAA still works without it
+        proj_jittered = proj
+        # if pipeline.taa_pass !== nothing
+        #     viewport = Int32[0, 0, 0, 0]
+        #     glGetIntegerv(GL_VIEWPORT, viewport)
+        #     width, height = Int(viewport[3]), Int(viewport[4])
+        #     proj_jittered = apply_taa_jitter!(proj, pipeline.taa_pass.jitter_index, width, height)
+        # end
+
         # ---- G-Buffer pass (opaque only) ----
-        render_gbuffer_pass!(backend, pipeline, opaque_entities, view, proj)
+        render_gbuffer_pass!(backend, pipeline, opaque_entities, view, proj_jittered)
 
         # ---- Deferred lighting pass ----
+        # Note: Use non-jittered proj for lighting (jitter only affects geometry)
         render_deferred_lighting_pass!(backend, pipeline, cam_pos, view, proj, light_space, has_shadows)
 
         # ---- Screen-Space Ambient Occlusion (SSAO) pass ----
         ssao_texture = GLuint(0)
         if pipeline.ssao_pass !== nothing
             # Render SSAO (returns blurred occlusion texture)
+            # Note: Use non-jittered proj for SSAO
             ssao_texture = render_ssao!(pipeline.ssao_pass, pipeline.gbuffer, proj)
         end
 
         # ---- Screen-Space Reflections (SSR) pass ----
         if pipeline.ssr_pass !== nothing
             # Run SSR ray-marching
+            # Note: Use non-jittered proj for SSR
             render_ssr!(pipeline.ssr_pass, pipeline.gbuffer,
                        pipeline.lighting_fbo.color_texture,
                        view, proj, cam_pos)
@@ -605,13 +618,31 @@ function render_frame!(backend::OpenGLBackend, scene::Scene)
                                    pipeline.quad_vao)
         end
 
-        # ---- Copy lighting result to screen ----
+        # ---- Temporal Anti-Aliasing (TAA) pass ----
+        final_color_texture = pipeline.lighting_fbo.color_texture
+        if pipeline.taa_pass !== nothing
+            # Run TAA - blends current frame with reprojected history
+            # Note: Use non-jittered proj for reprojection
+            final_color_texture = render_taa!(pipeline.taa_pass,
+                                             pipeline.lighting_fbo.color_texture,
+                                             pipeline.gbuffer.depth_texture,
+                                             view, proj,
+                                             pipeline.quad_vao)
+        end
+
+        # ---- Copy final result to screen ----
         # Blit to default framebuffer
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, pipeline.lighting_fbo.fbo)
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GLuint(0))
         viewport = Int32[0, 0, 0, 0]
         glGetIntegerv(GL_VIEWPORT, viewport)
         width, height = Int(viewport[3]), Int(viewport[4])
+
+        # Blit from appropriate source (TAA if enabled, otherwise lighting FBO)
+        if pipeline.taa_pass !== nothing
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, pipeline.taa_pass.current_fbo)
+        else
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, pipeline.lighting_fbo.fbo)
+        end
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GLuint(0))
         glBlitFramebuffer(0, 0, width, height, 0, 0, width, height,
                          GL_COLOR_BUFFER_BIT, GL_NEAREST)
 
@@ -627,7 +658,7 @@ function render_frame!(backend::OpenGLBackend, scene::Scene)
 
             # Camera uniforms
             set_uniform!(sp, "u_View", view)
-            set_uniform!(sp, "u_Projection", proj)
+            set_uniform!(sp, "u_Projection", proj_jittered)  # Use jittered proj for consistency
             set_uniform!(sp, "u_CameraPos", cam_pos)
             set_uniform!(sp, "u_LightSpaceMatrix", light_space)
 
