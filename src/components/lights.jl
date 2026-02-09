@@ -33,3 +33,22 @@ struct DirectionalLightComponent <: Component
         direction::Vec3f = Vec3f(0, -1, 0)
     ) = new(color, intensity, direction)
 end
+
+"""
+    IBLComponent <: Component
+
+Image-Based Lighting component.
+Provides environmental lighting and reflections from an HDR environment map.
+Only one IBL component should be active in a scene at a time.
+"""
+struct IBLComponent <: Component
+    environment_path::String  # Path to HDR environment map
+    intensity::Float32        # Global intensity multiplier
+    enabled::Bool            # Toggle IBL on/off
+
+    IBLComponent(;
+        environment_path::String = "",
+        intensity::Float32 = 1.0f0,
+        enabled::Bool = true
+    ) = new(environment_path, intensity, enabled)
+end

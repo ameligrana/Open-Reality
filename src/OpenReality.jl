@@ -62,8 +62,13 @@ include("rendering/shader.jl")
 include("rendering/gpu_resources.jl")
 include("rendering/texture.jl")
 include("rendering/framebuffer.jl")
+include("rendering/gbuffer.jl")
+include("rendering/shader_variants.jl")
+include("rendering/ibl.jl")
+include("rendering/deferred.jl")
 include("rendering/post_processing.jl")
 include("rendering/shadow_map.jl")
+include("rendering/csm.jl")
 include("rendering/camera_utils.jl")
 include("rendering/frustum_culling.jl")
 
@@ -105,7 +110,7 @@ export Vec3d, Quaterniond
 export MeshComponent
 export MaterialComponent, TextureRef
 export CameraComponent
-export PointLightComponent, DirectionalLightComponent
+export PointLightComponent, DirectionalLightComponent, IBLComponent
 export cube_mesh, sphere_mesh, plane_mesh
 export PlayerComponent, create_player
 export PlayerController, find_player_and_camera, update_player!
@@ -124,6 +129,10 @@ export update_animations!
 # Export Shadow Mapping
 export ShadowMap, create_shadow_map!, destroy_shadow_map!, compute_light_space_matrix
 
+# Export Cascaded Shadow Mapping
+export CascadedShadowMap, create_csm!, destroy_csm!, compute_cascade_splits
+export compute_cascade_light_matrix, render_csm_cascade!
+
 # Export Frustum Culling
 export Frustum, FrustumPlane, BoundingSphere
 export extract_frustum, bounding_sphere_from_mesh, is_sphere_in_frustum
@@ -131,6 +140,16 @@ export extract_frustum, bounding_sphere_from_mesh, is_sphere_in_frustum
 # Export Post-Processing
 export Framebuffer, PostProcessConfig, PostProcessPipeline
 export ToneMappingMode, TONEMAP_REINHARD, TONEMAP_ACES, TONEMAP_UNCHARTED2
+
+# Export Deferred Rendering
+export GBuffer, create_gbuffer!, destroy_gbuffer!, resize_gbuffer!
+export bind_gbuffer_for_write!, bind_gbuffer_textures_for_read!, unbind_framebuffer!
+export ShaderFeature, ShaderVariantKey, ShaderLibrary
+export get_or_compile_variant!, determine_shader_variant, destroy_shader_library!
+export DeferredPipeline, create_deferred_pipeline!, destroy_deferred_pipeline!, resize_deferred_pipeline!
+
+# Export IBL
+export IBLEnvironment, create_ibl_environment!, destroy_ibl_environment!
 
 # Export Backend
 export AbstractBackend, initialize!, shutdown!, render_frame!
