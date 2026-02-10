@@ -279,12 +279,27 @@ function _extract_gltf_material(gltf::GLTFLib.Object, prim::GLTFLib.Primitive, b
         end
     end
 
+    # Clear coat extension (KHR_materials_clearcoat)
+    clearcoat = Float32(0.0)
+    clearcoat_roughness = Float32(0.0)
+    if hasproperty(mat, :extensions) && mat.extensions !== nothing
+        exts = mat.extensions
+        if exts isa Dict && haskey(exts, "KHR_materials_clearcoat")
+            cc_ext = exts["KHR_materials_clearcoat"]
+            if cc_ext isa Dict
+                clearcoat = Float32(get(cc_ext, "clearcoatFactor", 0.0))
+                clearcoat_roughness = Float32(get(cc_ext, "clearcoatRoughnessFactor", 0.0))
+            end
+        end
+    end
+
     return MaterialComponent(
         color=color, metallic=metallic, roughness=roughness,
         albedo_map=albedo_map, normal_map=normal_map,
         metallic_roughness_map=mr_map, ao_map=ao_map,
         emissive_map=emissive_map, emissive_factor=emissive_factor,
-        opacity=opacity, alpha_cutoff=alpha_cutoff
+        opacity=opacity, alpha_cutoff=alpha_cutoff,
+        clearcoat=clearcoat, clearcoat_roughness=clearcoat_roughness
     )
 end
 

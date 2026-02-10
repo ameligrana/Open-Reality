@@ -3,12 +3,13 @@
 #   - MRT 0 (RGBA16F): RGB = albedo (linear), A = metallic
 #   - MRT 1 (RGBA16F): RGB = world-space normal (packed), A = roughness
 #   - MRT 2 (RGBA16F): RGB = emissive, A = ambient occlusion
+#   - MRT 3 (RGBA8):   R = clearcoat, G = clearcoat_roughness, B = subsurface, A = reserved
 #   - Depth: GL_DEPTH_COMPONENT24 (shared with final framebuffer)
 
 """
     GBuffer
 
-G-Buffer for deferred rendering with 3 color attachments and depth.
+G-Buffer for deferred rendering with 4 color attachments and depth.
 Stores material properties for the lighting pass.
 """
 mutable struct GBuffer
@@ -16,12 +17,13 @@ mutable struct GBuffer
     albedo_metallic_texture::GLuint      # MRT 0: RGBA16F
     normal_roughness_texture::GLuint     # MRT 1: RGBA16F
     emissive_ao_texture::GLuint          # MRT 2: RGBA16F
+    advanced_material_texture::GLuint    # MRT 3: RGBA8 (clearcoat, SSS, etc.)
     depth_texture::GLuint                # Depth texture (can be sampled in shaders)
     width::Int
     height::Int
 
     GBuffer(; width::Int=1280, height::Int=720) =
-        new(GLuint(0), GLuint(0), GLuint(0), GLuint(0), GLuint(0), width, height)
+        new(GLuint(0), GLuint(0), GLuint(0), GLuint(0), GLuint(0), GLuint(0), width, height)
 end
 
 """
@@ -75,6 +77,18 @@ function create_gbuffer!(gb::GBuffer, width::Int, height::Int)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, GL_TEXTURE_2D, gb.emissive_ao_texture, 0)
 
+    # MRT 3: Advanced material data (clearcoat, SSS, etc.) — RGBA8 is sufficient for [0,1] values
+    tex_ref = Ref(GLuint(0))
+    glGenTextures(1, tex_ref)
+    gb.advanced_material_texture = tex_ref[]
+    glBindTexture(GL_TEXTURE_2D, gb.advanced_material_texture)
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, C_NULL)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT3, GL_TEXTURE_2D, gb.advanced_material_texture, 0)
+
     # Depth texture (can be sampled for SSR, SSAO, etc.)
     tex_ref = Ref(GLuint(0))
     glGenTextures(1, tex_ref)
@@ -88,8 +102,8 @@ function create_gbuffer!(gb::GBuffer, width::Int, height::Int)
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D, gb.depth_texture, 0)
 
     # Specify which color attachments to use for rendering (MRT)
-    attachments = GLenum[GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2]
-    glDrawBuffers(GLsizei(3), pointer(attachments))
+    attachments = GLenum[GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3]
+    glDrawBuffers(GLsizei(4), pointer(attachments))
 
     # Verify framebuffer completeness
     status = glCheckFramebufferStatus(GL_FRAMEBUFFER)
@@ -123,6 +137,10 @@ function destroy_gbuffer!(gb::GBuffer)
         glDeleteTextures(1, Ref(gb.emissive_ao_texture))
         gb.emissive_ao_texture = GLuint(0)
     end
+    if gb.advanced_material_texture != GLuint(0)
+        glDeleteTextures(1, Ref(gb.advanced_material_texture))
+        gb.advanced_material_texture = GLuint(0)
+    end
     if gb.depth_texture != GLuint(0)
         glDeleteTextures(1, Ref(gb.depth_texture))
         gb.depth_texture = GLuint(0)
@@ -147,9 +165,9 @@ Bind G-Buffer for writing (geometry pass).
 """
 function bind_gbuffer_for_write!(gb::GBuffer)
     glBindFramebuffer(GL_FRAMEBUFFER, gb.fbo)
-    # Ensure all 3 color attachments are active for writing
-    attachments = GLenum[GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2]
-    glDrawBuffers(GLsizei(3), pointer(attachments))
+    # Ensure all 4 color attachments are active for writing
+    attachments = GLenum[GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2, GL_COLOR_ATTACHMENT3]
+    glDrawBuffers(GLsizei(4), pointer(attachments))
     return nothing
 end
 
@@ -164,6 +182,7 @@ Bindings:
 - start_unit + 1: normal_roughness
 - start_unit + 2: emissive_ao
 - start_unit + 3: depth
+- start_unit + 4: advanced_material
 """
 function bind_gbuffer_textures_for_read!(gb::GBuffer, start_unit::Int=0)
     glActiveTexture(GL_TEXTURE0 + start_unit)
@@ -178,7 +197,10 @@ function bind_gbuffer_textures_for_read!(gb::GBuffer, start_unit::Int=0)
     glActiveTexture(GL_TEXTURE0 + start_unit + 3)
     glBindTexture(GL_TEXTURE_2D, gb.depth_texture)
 
-    return start_unit + 4
+    glActiveTexture(GL_TEXTURE0 + start_unit + 4)
+    glBindTexture(GL_TEXTURE_2D, gb.advanced_material_texture)
+
+    return start_unit + 5
 end
 
 """

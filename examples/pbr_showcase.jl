@@ -226,6 +226,83 @@ s = scene([
         ColliderComponent(shape=AABBShape(Vec3f(10.0, 0.5, 3.0))),
         RigidBodyComponent(body_type=BODY_STATIC)
     ]),
+
+    # ====== Advanced Material Showcase ======
+
+    # Clear coat sphere (car paint effect)
+    entity([
+        sphere_mesh(radius=0.8f0),
+        MaterialComponent(
+            color=RGB{Float32}(0.8, 0.1, 0.1),  # Deep red
+            metallic=0.9f0,
+            roughness=0.4f0,
+            clearcoat=1.0f0,
+            clearcoat_roughness=0.03f0
+        ),
+        transform(position=Vec3d(-4, 1.5, 4)),
+        ColliderComponent(shape=SphereShape(0.8f0)),
+        RigidBodyComponent(body_type=BODY_STATIC)
+    ]),
+
+    # Clear coat sphere (glossy blue)
+    entity([
+        sphere_mesh(radius=0.8f0),
+        MaterialComponent(
+            color=RGB{Float32}(0.1, 0.2, 0.8),  # Deep blue
+            metallic=0.7f0,
+            roughness=0.5f0,
+            clearcoat=0.8f0,
+            clearcoat_roughness=0.1f0
+        ),
+        transform(position=Vec3d(-2, 1.5, 4)),
+        ColliderComponent(shape=SphereShape(0.8f0)),
+        RigidBodyComponent(body_type=BODY_STATIC)
+    ]),
+
+    # Subsurface scattering sphere (wax/skin-like)
+    entity([
+        sphere_mesh(radius=0.8f0),
+        MaterialComponent(
+            color=RGB{Float32}(0.9, 0.7, 0.5),  # Skin tone
+            metallic=0.0f0,
+            roughness=0.6f0,
+            subsurface=0.8f0,
+            subsurface_color=Vec3f(1.0f0, 0.2f0, 0.1f0)
+        ),
+        transform(position=Vec3d(0, 1.5, 4)),
+        ColliderComponent(shape=SphereShape(0.8f0)),
+        RigidBodyComponent(body_type=BODY_STATIC)
+    ]),
+
+    # Subsurface scattering sphere (jade-like)
+    entity([
+        sphere_mesh(radius=0.8f0),
+        MaterialComponent(
+            color=RGB{Float32}(0.3, 0.7, 0.4),  # Jade green
+            metallic=0.0f0,
+            roughness=0.3f0,
+            subsurface=0.6f0,
+            subsurface_color=Vec3f(0.1f0, 0.8f0, 0.2f0)
+        ),
+        transform(position=Vec3d(2, 1.5, 4)),
+        ColliderComponent(shape=SphereShape(0.8f0)),
+        RigidBodyComponent(body_type=BODY_STATIC)
+    ]),
+
+    # Combined: Clear coat + metallic (chrome-like)
+    entity([
+        sphere_mesh(radius=0.8f0),
+        MaterialComponent(
+            color=RGB{Float32}(0.95, 0.95, 0.95),  # Bright silver
+            metallic=1.0f0,
+            roughness=0.1f0,
+            clearcoat=1.0f0,
+            clearcoat_roughness=0.05f0
+        ),
+        transform(position=Vec3d(4, 1.5, 4)),
+        ColliderComponent(shape=SphereShape(0.8f0)),
+        RigidBodyComponent(body_type=BODY_STATIC)
+    ]),
 ])
 
 @info """
@@ -233,16 +310,16 @@ PBR & Deferred Rendering Showcase
 ==================================
 Features demonstrated:
 - Image-Based Lighting (IBL): Procedural sky with photorealistic ambient lighting
-  - Irradiance map for diffuse lighting
-  - Prefiltered specular reflections based on roughness
-  - Split-sum approximation for real-time PBR
 - Deferred Rendering: 4 lights (1 directional + 3 point)
 - Cascaded Shadow Maps: 4 cascades with PSSM for high-quality shadows
 - PBR Materials: Metallic/roughness workflow
-  - Left spheres: Metallic (gold) with varying roughness (0.0 to 1.0)
-  - Right spheres: Non-metallic (dielectric) materials
-- Cook-Torrance BRDF: Industry-standard physically-based lighting
-- Dynamic lights with physically-based falloff
+  - Front row: Metallic (gold) with varying roughness + dielectric materials
+- Bloom + HDR: ACES tone mapping with bloom on bright surfaces
+- Advanced Materials (back row):
+  - Clear coat: Car paint / lacquered surfaces (red, blue, chrome spheres)
+  - Subsurface scattering: Skin-like and jade-like translucent materials
+- Cook-Torrance BRDF with energy-conserving clear coat layer
+- FXAA anti-aliasing
 
 Controls:
 - WASD: Move
@@ -253,4 +330,11 @@ Controls:
 Scene stats: $(entity_count(s)) entities
 """
 
-render(s)
+render(s, post_process=PostProcessConfig(
+    bloom_enabled=true,
+    bloom_threshold=1.0f0,
+    bloom_intensity=0.3f0,
+    tone_mapping=TONEMAP_ACES,
+    fxaa_enabled=true,
+    gamma=2.2f0
+))

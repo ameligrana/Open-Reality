@@ -16,6 +16,7 @@ uniform mat4 u_Model;
 uniform mat4 u_View;
 uniform mat4 u_Projection;
 uniform mat3 u_NormalMatrix;
+uniform vec3 u_CameraPos;
 
 out vec3 v_WorldPos;
 out vec3 v_Normal;
@@ -41,6 +42,9 @@ const GBUFFER_FRAGMENT_SHADER = """
 // #define FEATURE_AO_MAP
 // #define FEATURE_EMISSIVE_MAP
 // #define FEATURE_ALPHA_CUTOFF
+// #define FEATURE_CLEARCOAT
+// #define FEATURE_PARALLAX_MAPPING
+// #define FEATURE_SUBSURFACE
 
 in vec3 v_WorldPos;
 in vec3 v_Normal;
@@ -50,6 +54,7 @@ in vec2 v_TexCoord;
 layout(location = 0) out vec4 gAlbedoMetallic;
 layout(location = 1) out vec4 gNormalRoughness;
 layout(location = 2) out vec4 gEmissiveAO;
+layout(location = 3) out vec4 gAdvancedMaterial;
 
 // Material uniforms
 uniform vec3 u_Albedo;
@@ -59,6 +64,7 @@ uniform float u_AO;
 uniform vec3 u_EmissiveFactor;
 uniform float u_Opacity;
 uniform float u_AlphaCutoff;
+uniform vec3 u_CameraPos;
 
 // Texture maps
 #ifdef FEATURE_ALBEDO_MAP
@@ -81,11 +87,62 @@ uniform sampler2D u_AOMap;
 uniform sampler2D u_EmissiveMap;
 #endif
 
-// Normal mapping via screen-space derivatives
-vec3 getNormalFromMap()
+// Advanced material uniforms
+#ifdef FEATURE_CLEARCOAT
+uniform float u_Clearcoat;
+uniform float u_ClearcoatRoughness;
+#endif
+
+#ifdef FEATURE_PARALLAX_MAPPING
+uniform sampler2D u_HeightMap;
+uniform float u_ParallaxScale;
+#endif
+
+#ifdef FEATURE_SUBSURFACE
+uniform float u_Subsurface;
+#endif
+
+// Parallax Occlusion Mapping
+#ifdef FEATURE_PARALLAX_MAPPING
+vec2 parallaxOcclusionMapping(vec2 texCoords, vec3 viewDirTangent)
+{
+    // Adaptive layer count based on viewing angle
+    const float minLayers = 8.0;
+    const float maxLayers = 32.0;
+    float numLayers = mix(maxLayers, minLayers, abs(dot(vec3(0.0, 0.0, 1.0), viewDirTangent)));
+
+    float layerDepth = 1.0 / numLayers;
+    float currentLayerDepth = 0.0;
+    vec2 P = viewDirTangent.xy / viewDirTangent.z * u_ParallaxScale;
+    vec2 deltaTexCoords = P / numLayers;
+
+    vec2 currentTexCoords = texCoords;
+    float currentDepthMapValue = texture(u_HeightMap, currentTexCoords).r;
+
+    // Ray march through height map
+    for (int i = 0; i < 32; ++i)
+    {
+        if (currentLayerDepth >= currentDepthMapValue) break;
+        currentTexCoords -= deltaTexCoords;
+        currentDepthMapValue = texture(u_HeightMap, currentTexCoords).r;
+        currentLayerDepth += layerDepth;
+    }
+
+    // Relief mapping interpolation for smoother result
+    vec2 prevTexCoords = currentTexCoords + deltaTexCoords;
+    float afterDepth = currentDepthMapValue - currentLayerDepth;
+    float beforeDepth = texture(u_HeightMap, prevTexCoords).r - currentLayerDepth + layerDepth;
+    float weight = afterDepth / (afterDepth - beforeDepth);
+
+    return mix(currentTexCoords, prevTexCoords, weight);
+}
+#endif
+
+// Normal mapping via screen-space derivatives (uses texCoord parameter)
+vec3 getNormalFromMap(vec2 texCoord)
 {
 #ifdef FEATURE_NORMAL_MAP
-    vec3 tangentNormal = texture(u_NormalMap, v_TexCoord).xyz * 2.0 - 1.0;
+    vec3 tangentNormal = texture(u_NormalMap, texCoord).xyz * 2.0 - 1.0;
 
     vec3 Q1  = dFdx(v_WorldPos);
     vec3 Q2  = dFdy(v_WorldPos);
@@ -105,12 +162,37 @@ vec3 getNormalFromMap()
 
 void main()
 {
+    // Compute texture coordinates (may be displaced by POM)
+    vec2 texCoord = v_TexCoord;
+
+#ifdef FEATURE_PARALLAX_MAPPING
+    // Compute TBN from screen-space derivatives for POM view direction
+    vec3 Q1  = dFdx(v_WorldPos);
+    vec3 Q2  = dFdy(v_WorldPos);
+    vec2 st1 = dFdx(v_TexCoord);
+    vec2 st2 = dFdy(v_TexCoord);
+
+    vec3 N   = normalize(v_Normal);
+    vec3 T   = normalize(Q1 * st2.t - Q2 * st1.t);
+    vec3 B   = -normalize(cross(N, T));
+    mat3 TBN = mat3(T, B, N);
+
+    vec3 viewDir = normalize(u_CameraPos - v_WorldPos);
+    vec3 viewDirTangent = normalize(transpose(TBN) * viewDir);
+
+    texCoord = parallaxOcclusionMapping(v_TexCoord, viewDirTangent);
+
+    // Discard if UV goes out of range (prevents edge artifacts)
+    if (texCoord.x > 1.0 || texCoord.y > 1.0 || texCoord.x < 0.0 || texCoord.y < 0.0)
+        discard;
+#endif
+
     // Sample albedo
     vec3 albedo = u_Albedo;
     float alpha = u_Opacity;
 
 #ifdef FEATURE_ALBEDO_MAP
-    vec4 albedoSample = texture(u_AlbedoMap, v_TexCoord);
+    vec4 albedoSample = texture(u_AlbedoMap, texCoord);
     albedo = pow(albedoSample.rgb, vec3(2.2)); // sRGB to linear
     alpha = u_Opacity * albedoSample.a;
 #endif
@@ -125,7 +207,7 @@ void main()
     float roughness = u_Roughness;
 
 #ifdef FEATURE_METALLIC_ROUGHNESS_MAP
-    vec4 mr = texture(u_MetallicRoughnessMap, v_TexCoord);
+    vec4 mr = texture(u_MetallicRoughnessMap, texCoord);
     metallic = mr.b;  // Blue channel = metallic
     roughness = mr.g; // Green channel = roughness
 #endif
@@ -134,24 +216,41 @@ void main()
     float ao = u_AO;
 
 #ifdef FEATURE_AO_MAP
-    ao = texture(u_AOMap, v_TexCoord).r;
+    ao = texture(u_AOMap, texCoord).r;
 #endif
 
     // Sample emissive
     vec3 emissive = u_EmissiveFactor;
 
 #ifdef FEATURE_EMISSIVE_MAP
-    emissive = texture(u_EmissiveMap, v_TexCoord).rgb * u_EmissiveFactor;
+    emissive = texture(u_EmissiveMap, texCoord).rgb * u_EmissiveFactor;
 #endif
 
     // Get world-space normal (with normal mapping if available)
-    vec3 normal = getNormalFromMap();
+    vec3 normal = getNormalFromMap(texCoord);
 
     // Write to G-Buffer
     // Pack normal from [-1, 1] to [0, 1] for storage
     gAlbedoMetallic = vec4(albedo, metallic);
     gNormalRoughness = vec4(normal * 0.5 + 0.5, roughness);
     gEmissiveAO = vec4(emissive, ao);
+
+    // Write advanced material data to MRT 3
+    // R = clearcoat, G = clearcoat_roughness, B = subsurface, A = reserved
+    float cc = 0.0;
+    float ccRough = 0.0;
+    float sss = 0.0;
+
+#ifdef FEATURE_CLEARCOAT
+    cc = u_Clearcoat;
+    ccRough = u_ClearcoatRoughness;
+#endif
+
+#ifdef FEATURE_SUBSURFACE
+    sss = u_Subsurface;
+#endif
+
+    gAdvancedMaterial = vec4(cc, ccRough, sss, 0.0);
 }
 """
 
@@ -188,6 +287,10 @@ uniform sampler2D gAlbedoMetallic;
 uniform sampler2D gNormalRoughness;
 uniform sampler2D gEmissiveAO;
 uniform sampler2D gDepth;
+uniform sampler2D gAdvancedMaterial;
+
+// Subsurface scattering global parameters
+uniform vec3 u_SubsurfaceColor;
 
 // Camera
 uniform vec3 u_CameraPos;
@@ -384,6 +487,12 @@ void main()
     vec3 emissive = emissiveAO.rgb;
     float ao = emissiveAO.a;
 
+    // Unpack advanced material data (MRT 3)
+    vec4 advMat = texture(gAdvancedMaterial, v_TexCoord);
+    float clearcoat = advMat.r;
+    float clearcoatRoughness = advMat.g;
+    float subsurface = advMat.b;
+
     // Reconstruct world position
     vec3 worldPos = reconstructWorldPos(v_TexCoord, depth);
     vec3 V = normalize(u_CameraPos - worldPos);
@@ -393,6 +502,8 @@ void main()
     F0 = mix(F0, albedo, metallic);
 
     vec3 Lo = vec3(0.0);
+    vec3 ccLo = vec3(0.0);  // Clear coat contribution
+    vec3 sssLo = vec3(0.0); // Subsurface scattering contribution
 
     // Point lights
     for (int i = 0; i < u_NumPointLights; ++i)
@@ -407,6 +518,23 @@ void main()
 
         vec3 radiance = u_PointLightColors[i] * u_PointLightIntensities[i] * attenuation;
         Lo += computeRadiance(normal, V, L, radiance, albedo, metallic, roughness, F0);
+
+        // Clear coat: secondary specular lobe (dielectric, F0=0.04)
+        if (clearcoat > 0.0)
+        {
+            ccLo += computeRadiance(normal, V, L, radiance, vec3(1.0), 0.0, clearcoatRoughness, vec3(0.04));
+        }
+
+        // Subsurface scattering: wrap diffuse + back-lighting
+        if (subsurface > 0.0)
+        {
+            float wrap = 0.5;
+            float NdotL_wrap = max(0.0, (dot(normal, L) + wrap) / (1.0 + wrap));
+            vec3 H_back = normalize(L + normal * 0.3);
+            float VdotH_back = pow(clamp(dot(V, -H_back), 0.0, 1.0), 4.0);
+            float thickness = 1.0 - max(dot(normal, V), 0.0);
+            sssLo += u_SubsurfaceColor * albedo * (NdotL_wrap + VdotH_back * thickness) * radiance;
+        }
     }
 
     // Compute view-space depth for cascade selection
@@ -420,7 +548,40 @@ void main()
 
         // Apply shadows (first directional light only)
         float shadow = (i == 0) ? computeShadow(worldPos, normal, L, viewDepth) : 0.0;
-        Lo += computeRadiance(normal, V, L, radiance, albedo, metallic, roughness, F0) * (1.0 - shadow);
+        float shadowFactor = 1.0 - shadow;
+
+        Lo += computeRadiance(normal, V, L, radiance, albedo, metallic, roughness, F0) * shadowFactor;
+
+        // Clear coat for directional lights
+        if (clearcoat > 0.0)
+        {
+            ccLo += computeRadiance(normal, V, L, radiance, vec3(1.0), 0.0, clearcoatRoughness, vec3(0.04)) * shadowFactor;
+        }
+
+        // Subsurface scattering for directional lights
+        if (subsurface > 0.0)
+        {
+            float wrap = 0.5;
+            float NdotL_wrap = max(0.0, (dot(normal, L) + wrap) / (1.0 + wrap));
+            vec3 H_back = normalize(L + normal * 0.3);
+            float VdotH_back = pow(clamp(dot(V, -H_back), 0.0, 1.0), 4.0);
+            float thickness = 1.0 - max(dot(normal, V), 0.0);
+            sssLo += u_SubsurfaceColor * albedo * (NdotL_wrap + VdotH_back * thickness) * radiance * shadowFactor;
+        }
+    }
+
+    // Apply clear coat energy conservation:
+    // Base layer is attenuated by clear coat Fresnel reflection
+    if (clearcoat > 0.0)
+    {
+        vec3 ccFresnel = FresnelSchlick(max(dot(normal, V), 0.0), vec3(0.04));
+        Lo = Lo * (1.0 - clearcoat * ccFresnel) + clearcoat * ccLo;
+    }
+
+    // Apply subsurface scattering
+    if (subsurface > 0.0)
+    {
+        Lo += subsurface * sssLo;
     }
 
     // Ambient lighting with IBL or fallback
@@ -450,6 +611,17 @@ void main()
 
         // Combine diffuse and specular IBL
         ambient = (kD * diffuse + specular) * u_IBLIntensity * ao;
+
+        // Clear coat IBL contribution
+        if (clearcoat > 0.0)
+        {
+            vec3 ccR = reflect(-V, normal);
+            vec3 ccPrefilteredColor = textureLod(u_PrefilterMap, ccR, clearcoatRoughness * MAX_REFLECTION_LOD).rgb;
+            vec3 ccF = FresnelSchlick(max(dot(normal, V), 0.0), vec3(0.04));
+            vec2 ccBrdf = texture(u_BRDFLUT, vec2(max(dot(normal, V), 0.0), clearcoatRoughness)).rg;
+            vec3 ccSpecular = ccPrefilteredColor * (ccF * ccBrdf.x + ccBrdf.y);
+            ambient += clearcoat * ccSpecular * u_IBLIntensity;
+        }
     }
     else
     {

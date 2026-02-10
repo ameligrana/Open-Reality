@@ -334,6 +334,11 @@ function run_render_loop!(scene::Scene;
                           height::Int = 720,
                           title::String = "OpenReality",
                           post_process::Union{PostProcessConfig, Nothing} = nothing)
+    # Apply post_process config to backend if provided
+    if post_process !== nothing && backend isa OpenGLBackend && backend.post_process !== nothing
+        backend.post_process.config = post_process
+    end
+
     initialize!(backend, width=width, height=height, title=title)
 
     # Auto-detect player and set up FPS controller

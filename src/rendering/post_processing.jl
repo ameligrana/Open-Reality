@@ -386,11 +386,19 @@ function begin_post_process!(pp::PostProcessPipeline)
 end
 
 """
-    end_post_process!(pp::PostProcessPipeline, screen_width::Int, screen_height::Int)
+    end_post_process!(pp::PostProcessPipeline, screen_width::Int, screen_height::Int;
+                      input_texture::GLuint = GLuint(0))
 
 Execute the full post-processing chain and render to the default framebuffer.
+When `input_texture` is provided (non-zero), it is used as the HDR source instead of
+the internal scene FBO. This allows the deferred rendering path to feed its final
+HDR output (after TAA) into the post-processing chain.
 """
-function end_post_process!(pp::PostProcessPipeline, screen_width::Int, screen_height::Int)
+function end_post_process!(pp::PostProcessPipeline, screen_width::Int, screen_height::Int;
+                           input_texture::GLuint = GLuint(0))
+    # Use provided input texture or fall back to internal scene FBO
+    scene_texture = input_texture != GLuint(0) ? input_texture : pp.scene_fbo.color_texture
+
     glBindFramebuffer(GL_FRAMEBUFFER, GLuint(0))
     glDisable(GL_DEPTH_TEST)
 
@@ -405,7 +413,7 @@ function end_post_process!(pp::PostProcessPipeline, screen_width::Int, screen_he
         sp_bright = pp.bright_extract_shader
         glUseProgram(sp_bright.id)
         glActiveTexture(GL_TEXTURE0)
-        glBindTexture(GL_TEXTURE_2D, pp.scene_fbo.color_texture)
+        glBindTexture(GL_TEXTURE_2D, scene_texture)
         set_uniform!(sp_bright, "u_SceneTexture", Int32(0))
         set_uniform!(sp_bright, "u_Threshold", pp.config.bloom_threshold)
         _render_fullscreen_quad(pp.quad_vao)
@@ -453,7 +461,7 @@ function end_post_process!(pp::PostProcessPipeline, screen_width::Int, screen_he
     if sp_comp !== nothing
         glUseProgram(sp_comp.id)
         glActiveTexture(GL_TEXTURE0)
-        glBindTexture(GL_TEXTURE_2D, pp.scene_fbo.color_texture)
+        glBindTexture(GL_TEXTURE_2D, scene_texture)
         set_uniform!(sp_comp, "u_SceneTexture", Int32(0))
 
         if bloom_texture != GLuint(0)

@@ -14,6 +14,9 @@ Each feature adds a #define to the shader compilation.
     FEATURE_AO_MAP
     FEATURE_EMISSIVE_MAP
     FEATURE_ALPHA_CUTOFF
+    FEATURE_CLEARCOAT
+    FEATURE_PARALLAX_MAPPING
+    FEATURE_SUBSURFACE
 end
 
 """
@@ -46,6 +49,27 @@ mutable struct ShaderLibrary
 end
 
 """
+    _insert_defines_after_version(source::String, define_block::String) -> String
+
+Insert `#define` directives after the `#version` line in GLSL source.
+GLSL requires `#version` to be the very first line, so defines must come after it.
+"""
+function _insert_defines_after_version(source::String, define_block::String)::String
+    if isempty(define_block)
+        return source
+    end
+    # Find the end of the first line (#version ...)
+    newline_pos = findfirst('\n', source)
+    if newline_pos === nothing
+        # No newline — single-line source, just append
+        return source * "\n" * define_block * "\n"
+    end
+    version_line = source[1:newline_pos]  # includes the '\n'
+    rest = source[newline_pos+1:end]
+    return version_line * define_block * "\n" * rest
+end
+
+"""
     get_or_compile_variant!(lib::ShaderLibrary, key::ShaderVariantKey) -> ShaderProgram
 
 Get a cached shader variant or compile a new one if it doesn't exist.
@@ -62,10 +86,10 @@ function get_or_compile_variant!(lib::ShaderLibrary, key::ShaderVariantKey)::Sha
         push!(defines, "#define $(uppercase(string(feature)))")
     end
 
-    # Prepend defines to templates
+    # Insert defines after #version line (GLSL requires #version on the first line)
     define_block = join(defines, "\n")
-    vertex_src = define_block * "\n" * lib.template_vertex
-    fragment_src = define_block * "\n" * lib.template_fragment
+    vertex_src = _insert_defines_after_version(lib.template_vertex, define_block)
+    fragment_src = _insert_defines_after_version(lib.template_fragment, define_block)
 
     # Compile shader
     try
@@ -111,6 +135,17 @@ function determine_shader_variant(material::MaterialComponent)::ShaderVariantKey
     # Check alpha cutoff
     if material.alpha_cutoff > 0.0f0
         push!(features, FEATURE_ALPHA_CUTOFF)
+    end
+
+    # Advanced material features
+    if material.clearcoat > 0.0f0 || material.clearcoat_map !== nothing
+        push!(features, FEATURE_CLEARCOAT)
+    end
+    if material.height_map !== nothing && material.parallax_height_scale > 0.0f0
+        push!(features, FEATURE_PARALLAX_MAPPING)
+    end
+    if material.subsurface > 0.0f0
+        push!(features, FEATURE_SUBSURFACE)
     end
 
     return ShaderVariantKey(features)

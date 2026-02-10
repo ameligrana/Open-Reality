@@ -148,6 +148,9 @@ export ToneMappingMode, TONEMAP_REINHARD, TONEMAP_ACES, TONEMAP_UNCHARTED2
 export GBuffer, create_gbuffer!, destroy_gbuffer!, resize_gbuffer!
 export bind_gbuffer_for_write!, bind_gbuffer_textures_for_read!, unbind_framebuffer!
 export ShaderFeature, ShaderVariantKey, ShaderLibrary
+export FEATURE_ALBEDO_MAP, FEATURE_NORMAL_MAP, FEATURE_METALLIC_ROUGHNESS_MAP
+export FEATURE_AO_MAP, FEATURE_EMISSIVE_MAP, FEATURE_ALPHA_CUTOFF
+export FEATURE_CLEARCOAT, FEATURE_PARALLAX_MAPPING, FEATURE_SUBSURFACE
 export get_or_compile_variant!, determine_shader_variant, destroy_shader_library!
 export DeferredPipeline, create_deferred_pipeline!, destroy_deferred_pipeline!, resize_deferred_pipeline!
 

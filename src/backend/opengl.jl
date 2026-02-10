@@ -182,11 +182,21 @@ function bind_material_textures!(sp::ShaderProgram, material::MaterialComponent,
         glBindTexture(GL_TEXTURE_2D, gpu_tex.id)
         set_uniform!(sp, "u_EmissiveMap", texture_unit)
         set_uniform!(sp, "u_HasEmissiveMap", Int32(1))
+        texture_unit += Int32(1)
     else
         set_uniform!(sp, "u_HasEmissiveMap", Int32(0))
     end
 
     set_uniform!(sp, "u_EmissiveFactor", material.emissive_factor)
+
+    # Height map (for parallax occlusion mapping)
+    if material.height_map !== nothing && material.parallax_height_scale > 0.0f0
+        gpu_tex = load_texture(texture_cache, material.height_map.path)
+        glActiveTexture(GL_TEXTURE0 + UInt32(texture_unit))
+        glBindTexture(GL_TEXTURE_2D, gpu_tex.id)
+        set_uniform!(sp, "u_HeightMap", texture_unit)
+        set_uniform!(sp, "u_ParallaxScale", material.parallax_height_scale)
+    end
 
     return nothing
 end
@@ -231,12 +241,13 @@ end
 # ---- Deferred Rendering Helpers ----
 
 """
-    render_gbuffer_pass!(backend, pipeline, opaque_entities, view, proj)
+    render_gbuffer_pass!(backend, pipeline, opaque_entities, view, proj, cam_pos)
 
 Render opaque entities to the G-Buffer.
 """
 function render_gbuffer_pass!(backend::OpenGLBackend, pipeline::DeferredPipeline,
-                              opaque_entities, view::Mat4f, proj::Mat4f)
+                              opaque_entities, view::Mat4f, proj::Mat4f,
+                              cam_pos::Vec3f=Vec3f(0,0,0))
     # Bind G-Buffer for writing
     bind_gbuffer_for_write!(pipeline.gbuffer)
     glViewport(0, 0, pipeline.gbuffer.width, pipeline.gbuffer.height)
@@ -278,6 +289,16 @@ function render_gbuffer_pass!(backend::OpenGLBackend, pipeline::DeferredPipeline
         set_uniform!(sp, "u_EmissiveFactor", material.emissive_factor)
         set_uniform!(sp, "u_Opacity", material.opacity)
         set_uniform!(sp, "u_AlphaCutoff", material.alpha_cutoff)
+        set_uniform!(sp, "u_CameraPos", cam_pos)
+
+        # Advanced material uniforms
+        if material.clearcoat > 0.0f0
+            set_uniform!(sp, "u_Clearcoat", material.clearcoat)
+            set_uniform!(sp, "u_ClearcoatRoughness", material.clearcoat_roughness)
+        end
+        if material.subsurface > 0.0f0
+            set_uniform!(sp, "u_Subsurface", material.subsurface)
+        end
 
         # Bind material textures
         bind_material_textures!(sp, material, backend.texture_cache)
@@ -314,7 +335,7 @@ function render_deferred_lighting_pass!(backend::OpenGLBackend, pipeline::Deferr
     sp = pipeline.lighting_shader
     glUseProgram(sp.id)
 
-    # Bind G-Buffer textures for reading (texture units 0-3)
+    # Bind G-Buffer textures for reading (texture units 0-4)
     next_unit = bind_gbuffer_textures_for_read!(pipeline.gbuffer, 0)
 
     # Set G-Buffer sampler uniforms
@@ -322,6 +343,10 @@ function render_deferred_lighting_pass!(backend::OpenGLBackend, pipeline::Deferr
     set_uniform!(sp, "gNormalRoughness", Int32(1))
     set_uniform!(sp, "gEmissiveAO", Int32(2))
     set_uniform!(sp, "gDepth", Int32(3))
+    set_uniform!(sp, "gAdvancedMaterial", Int32(4))
+
+    # Subsurface scattering global color
+    set_uniform!(sp, "u_SubsurfaceColor", Vec3f(1.0f0, 0.2f0, 0.1f0))
 
     # Camera uniforms
     set_uniform!(sp, "u_CameraPos", cam_pos)
@@ -577,7 +602,7 @@ function render_frame!(backend::OpenGLBackend, scene::Scene)
         # end
 
         # ---- G-Buffer pass (opaque only) ----
-        render_gbuffer_pass!(backend, pipeline, opaque_entities, view, proj_jittered)
+        render_gbuffer_pass!(backend, pipeline, opaque_entities, view, proj_jittered, cam_pos)
 
         # ---- Deferred lighting pass ----
         # Note: Use non-jittered proj for lighting (jitter only affects geometry)
@@ -630,21 +655,25 @@ function render_frame!(backend::OpenGLBackend, scene::Scene)
                                              pipeline.quad_vao)
         end
 
-        # ---- Copy final result to screen ----
-        # Blit to default framebuffer
+        # ---- Post-processing (bloom, tone mapping, FXAA) ----
         viewport = Int32[0, 0, 0, 0]
         glGetIntegerv(GL_VIEWPORT, viewport)
         width, height = Int(viewport[3]), Int(viewport[4])
 
-        # Blit from appropriate source (TAA if enabled, otherwise lighting FBO)
-        if pipeline.taa_pass !== nothing
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, pipeline.taa_pass.current_fbo)
+        if backend.post_process !== nothing
+            end_post_process!(backend.post_process, width, height;
+                              input_texture=final_color_texture)
         else
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, pipeline.lighting_fbo.fbo)
+            # Fallback: blit directly (no tone mapping)
+            if pipeline.taa_pass !== nothing
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, pipeline.taa_pass.current_fbo)
+            else
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, pipeline.lighting_fbo.fbo)
+            end
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GLuint(0))
+            glBlitFramebuffer(0, 0, width, height, 0, 0, width, height,
+                             GL_COLOR_BUFFER_BIT, GL_NEAREST)
         end
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GLuint(0))
-        glBlitFramebuffer(0, 0, width, height, 0, 0, width, height,
-                         GL_COLOR_BUFFER_BIT, GL_NEAREST)
 
         # Copy depth to default framebuffer for transparent pass
         copy_depth_buffer!(pipeline.gbuffer.fbo, GLuint(0), width, height)
