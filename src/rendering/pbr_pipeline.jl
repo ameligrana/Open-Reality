@@ -69,12 +69,20 @@ uniform int u_HasEmissiveMap;
 
 uniform vec3 u_EmissiveFactor;
 
-// Shadow mapping
+// Shadow mapping (single map — forward path fallback)
 uniform sampler2D u_ShadowMap;
 uniform int u_HasShadows;
 
+// Cascaded Shadow Mapping (CSM) — used by transparent pass in deferred mode
+#define MAX_CASCADES 4
+uniform sampler2D u_CascadeShadowMaps[MAX_CASCADES];
+uniform mat4 u_CascadeMatrices[MAX_CASCADES];
+uniform float u_CascadeSplits[MAX_CASCADES + 1];
+uniform int u_NumCascades;
+
 // Camera
 uniform vec3 u_CameraPos;
+uniform mat4 u_View;
 
 // Point lights
 uniform int u_NumPointLights;
@@ -178,6 +186,64 @@ float computeShadow(vec4 fragPosLightSpace, vec3 N, vec3 L)
     return shadow;
 }
 
+// Helper: sample a single cascade shadow map (constant index avoids GLSL 3.3 dynamic-indexing limitation)
+float computeShadowForCascade(vec3 worldPos, vec3 N, vec3 L, int cascadeIdx, sampler2D shadowMap, mat4 cascadeMatrix)
+{
+    vec4 fragPosLightSpace = cascadeMatrix * vec4(worldPos, 1.0);
+    vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
+    projCoords = projCoords * 0.5 + 0.5;
+
+    if (projCoords.z > 1.0 || projCoords.x < 0.0 || projCoords.x > 1.0 ||
+        projCoords.y < 0.0 || projCoords.y > 1.0)
+        return 0.0;
+
+    float bias = max(0.005 * (1.0 - dot(N, L)), 0.001);
+    bias *= 1.0 / (float(cascadeIdx + 1) * 0.5 + 1.0);
+
+    float shadow = 0.0;
+    vec2 texelSize = 1.0 / textureSize(shadowMap, 0);
+    for (int x = -1; x <= 1; ++x)
+    {
+        for (int y = -1; y <= 1; ++y)
+        {
+            float pcfDepth = texture(shadowMap, projCoords.xy + vec2(x, y) * texelSize).r;
+            shadow += projCoords.z - bias > pcfDepth ? 1.0 : 0.0;
+        }
+    }
+    shadow /= 9.0;
+    return shadow;
+}
+
+// CSM shadow computation (matches deferred lighting shader)
+float computeCSMShadow(vec3 worldPos, vec3 N, vec3 L)
+{
+    if (u_NumCascades == 0)
+        return 0.0;
+
+    // View-space depth for cascade selection
+    float viewDepth = length(u_CameraPos - worldPos);
+
+    int cascadeIndex = u_NumCascades - 1;
+    for (int i = 0; i < u_NumCascades; ++i)
+    {
+        if (viewDepth < u_CascadeSplits[i + 1])
+        {
+            cascadeIndex = i;
+            break;
+        }
+    }
+
+    // Switch avoids dynamic sampler-array indexing (GLSL 3.3 limitation)
+    switch (cascadeIndex)
+    {
+        case 0: return computeShadowForCascade(worldPos, N, L, 0, u_CascadeShadowMaps[0], u_CascadeMatrices[0]);
+        case 1: return computeShadowForCascade(worldPos, N, L, 1, u_CascadeShadowMaps[1], u_CascadeMatrices[1]);
+        case 2: return computeShadowForCascade(worldPos, N, L, 2, u_CascadeShadowMaps[2], u_CascadeMatrices[2]);
+        case 3: return computeShadowForCascade(worldPos, N, L, 3, u_CascadeShadowMaps[3], u_CascadeMatrices[3]);
+        default: return 0.0;
+    }
+}
+
 // Normal mapping via screen-space derivatives (no stored tangents needed)
 vec3 getNormalFromMap()
 {
@@ -247,7 +313,7 @@ void main()
         Lo += computeRadiance(N, V, L, radiance, albedo, metallic, roughness, F0);
     }
 
-    // Directional lights (first light casts shadows)
+    // Directional lights (first light casts shadows via CSM or single map)
     for (int i = 0; i < u_NumDirLights; ++i)
     {
         vec3 L = normalize(-u_DirLightDirections[i]);
@@ -256,7 +322,12 @@ void main()
 
         // Apply shadow to first directional light
         if (i == 0 && u_HasShadows == 1) {
-            float shadow = computeShadow(v_LightSpacePos, N, L);
+            float shadow;
+            if (u_NumCascades > 0) {
+                shadow = computeCSMShadow(v_WorldPos, N, L);
+            } else {
+                shadow = computeShadow(v_LightSpacePos, N, L);
+            }
             contrib *= (1.0 - shadow);
         }
 

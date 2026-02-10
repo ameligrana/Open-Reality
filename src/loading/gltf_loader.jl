@@ -4,7 +4,8 @@
     load_gltf(path::String; base_dir::String = dirname(path)) -> Vector{EntityDef}
 
 Load a glTF 2.0 file (.gltf or .glb) and return a vector of EntityDefs.
-Each mesh primitive becomes a separate entity with MeshComponent and MaterialComponent.
+Traverses the glTF node hierarchy to preserve transforms and parent-child relationships.
+Each node becomes an entity with TransformComponent; mesh primitives become child entities.
 """
 function load_gltf(path::String; base_dir::String = dirname(abspath(path)))
     gltf = GLTFLib.load(path)
@@ -13,64 +14,186 @@ function load_gltf(path::String; base_dir::String = dirname(abspath(path)))
     buffers_data = _load_gltf_buffers(gltf, base_dir)
 
     entities_out = EntityDef[]
-    # Map glTF node index (0-based) -> EntityID for animation targeting
     node_to_entity = Dict{Int, EntityID}()
 
-    gltf.meshes === nothing && return entities_out
-
-    # Build node→mesh mapping for animation targets
-    node_mesh_map = Dict{Int, Int}()  # node_idx -> mesh_idx (0-based)
-    if gltf.nodes !== nothing
-        for (i, node) in enumerate(gltf.nodes)
-            if node.mesh !== nothing
-                node_mesh_map[i-1] = node.mesh  # store 0-based
+    # No nodes: fall back to mesh-based loading for compatibility
+    if gltf.nodes === nothing || isempty(gltf.nodes)
+        gltf.meshes === nothing && return entities_out
+        for mesh in gltf.meshes
+            for prim in mesh.primitives
+                mesh_comp = _extract_gltf_mesh(gltf, prim, buffers_data)
+                mat_comp = _extract_gltf_material(gltf, prim, base_dir, buffers_data)
+                push!(entities_out, entity([mesh_comp, mat_comp, transform()]))
             end
         end
+        return entities_out
     end
 
-    # Track which mesh index maps to which entity indices
-    mesh_entity_map = Dict{Int, Vector{Int}}()  # mesh_idx (0-based) -> entity indices in entities_out
-    entity_idx = 0
-
-    for (mi, mesh) in enumerate(gltf.meshes)
-        mesh_0idx = mi - 1
-        start_idx = entity_idx
-        for prim in mesh.primitives
-            mesh_comp = _extract_gltf_mesh(gltf, prim, buffers_data)
-            mat_comp = _extract_gltf_material(gltf, prim, base_dir)
-            push!(entities_out, entity([mesh_comp, mat_comp, transform()]))
-            entity_idx += 1
+    # Pre-extract mesh primitives as (MeshComponent, MaterialComponent) tuples
+    mesh_primitives = Dict{Int, Vector{Tuple{MeshComponent, MaterialComponent}}}()
+    if gltf.meshes !== nothing
+        for (mi, mesh) in enumerate(gltf.meshes)
+            prims = Tuple{MeshComponent, MaterialComponent}[]
+            for prim in mesh.primitives
+                mesh_comp = _extract_gltf_mesh(gltf, prim, buffers_data)
+                mat_comp = _extract_gltf_material(gltf, prim, base_dir, buffers_data)
+                push!(prims, (mesh_comp, mat_comp))
+            end
+            mesh_primitives[mi - 1] = prims  # 0-based mesh index
         end
-        mesh_entity_map[mesh_0idx] = collect(start_idx:(entity_idx-1))
     end
 
-    # Build node_to_entity: map node 0-based index to the first entity of its mesh
-    for (node_idx, mesh_idx) in node_mesh_map
-        if haskey(mesh_entity_map, mesh_idx) && !isempty(mesh_entity_map[mesh_idx])
-            # Note: entity IDs are assigned at scene creation, not here.
-            # Store the index into entities_out (0-based) for later mapping.
-            node_to_entity[node_idx] = EntityID(mesh_entity_map[mesh_idx][1] + 1)
+    # Find root nodes from the default scene, or by exclusion
+    root_node_indices = _find_gltf_root_nodes(gltf)
+
+    # Build node EntityDefs with DFS position tracking for animation remapping.
+    # The DFS counter tracks the 1-based position each entity will occupy when
+    # scene() flattens the hierarchy via add_entity_from_def.
+    dfs_counter = Ref(0)
+
+    function _build_node_entity(node_idx::Int)::EntityDef
+        node = gltf.nodes[node_idx]  # ZVector is already 0-indexed
+
+        # Track this node's DFS position for animation targeting
+        dfs_counter[] += 1
+        node_to_entity[node_idx] = EntityID(dfs_counter[])
+
+        tc = _extract_node_transform(node)
+        children = Any[]
+
+        # Mesh primitives become child entities under this node's transform
+        if node.mesh !== nothing && haskey(mesh_primitives, node.mesh)
+            for (mc, matc) in mesh_primitives[node.mesh]
+                dfs_counter[] += 1
+                push!(children, entity([mc, matc, transform()]))
+            end
         end
+
+        # Recurse into child nodes
+        if node.children !== nothing
+            for child_idx in node.children
+                push!(children, _build_node_entity(Int(child_idx)))
+            end
+        end
+
+        return entity([tc]; children=children)
+    end
+
+    for root_idx in root_node_indices
+        push!(entities_out, _build_node_entity(root_idx))
     end
 
     # Extract animations if present
     anim_clips = _extract_gltf_animations(gltf, buffers_data, node_to_entity)
     if !isempty(anim_clips)
-        # Attach AnimationComponent to the first entity
         anim_comp = AnimationComponent(
             clips=anim_clips,
             active_clip=1,
             playing=true,
             looping=true
         )
-        # Add animation component to first entity
         if !isempty(entities_out)
-            first_def = entities_out[1]
-            push!(first_def.components, anim_comp)
+            push!(entities_out[1].components, anim_comp)
         end
     end
 
     return entities_out
+end
+
+# ---- Node hierarchy helpers ----
+
+"""Find root node indices for the glTF file."""
+function _find_gltf_root_nodes(gltf::GLTFLib.Object)
+    root_indices = Int[]
+
+    # Try the default scene
+    if gltf.scene !== nothing && gltf.scenes !== nothing
+        scene_obj = gltf.scenes[gltf.scene]
+        if scene_obj.nodes !== nothing && !isempty(scene_obj.nodes)
+            return [Int(n) for n in scene_obj.nodes]
+        end
+    end
+
+    # Fallback: nodes not referenced as children of any other node
+    child_set = Set{Int}()
+    for (_, node) in enumerate(gltf.nodes)
+        if node.children !== nothing
+            for c in node.children
+                push!(child_set, Int(c))
+            end
+        end
+    end
+    for (i, _) in enumerate(gltf.nodes)
+        node_idx = i - 1  # enumerate on ZVector gives 1-based counter
+        if !(node_idx in child_set)
+            push!(root_indices, node_idx)
+        end
+    end
+
+    return root_indices
+end
+
+"""Extract a TransformComponent from a glTF node's TRS or matrix."""
+function _extract_node_transform(node)
+    if getfield(node, :matrix) !== nothing
+        m = node.matrix  # Cfloat[16], 1-based Julia Vector, column-major
+        # Translation from column 3
+        pos = Vec3d(Float64(m[13]), Float64(m[14]), Float64(m[15]))
+        # Scale as column magnitudes
+        sx = sqrt(Float64(m[1])^2 + Float64(m[2])^2 + Float64(m[3])^2)
+        sy = sqrt(Float64(m[5])^2 + Float64(m[6])^2 + Float64(m[7])^2)
+        sz = sqrt(Float64(m[9])^2 + Float64(m[10])^2 + Float64(m[11])^2)
+        scl = Vec3d(sx, sy, sz)
+        # Normalized rotation matrix
+        inv_sx = sx > 0.0 ? 1.0 / sx : 0.0
+        inv_sy = sy > 0.0 ? 1.0 / sy : 0.0
+        inv_sz = sz > 0.0 ? 1.0 / sz : 0.0
+        r11 = Float64(m[1]) * inv_sx;  r21 = Float64(m[2]) * inv_sx;  r31 = Float64(m[3]) * inv_sx
+        r12 = Float64(m[5]) * inv_sy;  r22 = Float64(m[6]) * inv_sy;  r32 = Float64(m[7]) * inv_sy
+        r13 = Float64(m[9]) * inv_sz;  r23 = Float64(m[10]) * inv_sz; r33 = Float64(m[11]) * inv_sz
+        rot = _rotation_matrix_to_quaternion(r11, r12, r13, r21, r22, r23, r31, r32, r33)
+        return transform(position=pos, rotation=rot, scale=scl)
+    else
+        # TRS (getproperty defaults provide identity if not explicitly set)
+        t = node.translation  # [x, y, z]
+        r = node.rotation     # [x, y, z, w]
+        s = node.scale        # [sx, sy, sz]
+        pos = Vec3d(Float64(t[1]), Float64(t[2]), Float64(t[3]))
+        rot = Quaterniond(Float64(r[4]), Float64(r[1]), Float64(r[2]), Float64(r[3]))
+        scl = Vec3d(Float64(s[1]), Float64(s[2]), Float64(s[3]))
+        return transform(position=pos, rotation=rot, scale=scl)
+    end
+end
+
+"""Convert a 3x3 rotation matrix to a quaternion (Shepperd's method)."""
+function _rotation_matrix_to_quaternion(r11, r12, r13, r21, r22, r23, r31, r32, r33)
+    trace = r11 + r22 + r33
+    if trace > 0.0
+        s = 0.5 / sqrt(trace + 1.0)
+        w = 0.25 / s
+        x = (r32 - r23) * s
+        y = (r13 - r31) * s
+        z = (r21 - r12) * s
+    elseif r11 > r22 && r11 > r33
+        s = 2.0 * sqrt(1.0 + r11 - r22 - r33)
+        w = (r32 - r23) / s
+        x = 0.25 * s
+        y = (r12 + r21) / s
+        z = (r13 + r31) / s
+    elseif r22 > r33
+        s = 2.0 * sqrt(1.0 + r22 - r11 - r33)
+        w = (r13 - r31) / s
+        x = (r12 + r21) / s
+        y = 0.25 * s
+        z = (r23 + r32) / s
+    else
+        s = 2.0 * sqrt(1.0 + r33 - r11 - r22)
+        w = (r21 - r12) / s
+        x = (r13 + r31) / s
+        y = (r23 + r32) / s
+        z = 0.25 * s
+    end
+    return Quaterniond(w, x, y, z)
 end
 
 # ---- Buffer loading ----
@@ -126,12 +249,17 @@ const GLTF_TYPE_COUNTS = Dict(
 
 function _read_accessor_data(gltf::GLTFLib.Object, accessor_idx::Int, buffers_data::Vector{Vector{UInt8}})
     accessor = gltf.accessors[accessor_idx]
-    accessor.bufferView === nothing && return Float32[]
+    if accessor.bufferView === nothing
+        @warn "glTF accessor $accessor_idx has no bufferView, returning empty data"
+        return Float32[]
+    end
 
     bv = gltf.bufferViews[accessor.bufferView]
     buf_data = buffers_data[bv.buffer + 1]  # buffers are 0-indexed in glTF, 1-indexed in our array
 
-    byte_offset = bv.byteOffset + accessor.byteOffset
+    bv_offset = something(bv.byteOffset, 0)
+    acc_offset = something(accessor.byteOffset, 0)
+    byte_offset = bv_offset + acc_offset
     component_size = get(GLTF_COMPONENT_SIZES, accessor.componentType, 4)
     type_count = get(GLTF_TYPE_COUNTS, accessor.type, 1)
     stride = bv.byteStride !== nothing ? bv.byteStride : component_size * type_count
@@ -164,12 +292,17 @@ end
 
 function _read_index_data(gltf::GLTFLib.Object, accessor_idx::Int, buffers_data::Vector{Vector{UInt8}})
     accessor = gltf.accessors[accessor_idx]
-    accessor.bufferView === nothing && return UInt32[]
+    if accessor.bufferView === nothing
+        @warn "glTF index accessor $accessor_idx has no bufferView, returning empty data"
+        return UInt32[]
+    end
 
     bv = gltf.bufferViews[accessor.bufferView]
     buf_data = buffers_data[bv.buffer + 1]
 
-    byte_offset = bv.byteOffset + accessor.byteOffset
+    bv_offset = something(bv.byteOffset, 0)
+    acc_offset = something(accessor.byteOffset, 0)
+    byte_offset = bv_offset + acc_offset
     component_size = get(GLTF_COMPONENT_SIZES, accessor.componentType, 4)
     stride = bv.byteStride !== nothing ? bv.byteStride : component_size
 
@@ -194,6 +327,29 @@ function _read_index_data(gltf::GLTFLib.Object, accessor_idx::Int, buffers_data:
 end
 
 # ---- Mesh extraction ----
+
+"""Generate sequential triangle indices for non-indexed primitives."""
+function _generate_fallback_indices(num_vertices::Int, mode::Int)
+    if mode == 5  # TRIANGLE_STRIP
+        indices = UInt32[]
+        for i in 0:(num_vertices - 3)
+            if i % 2 == 0
+                push!(indices, UInt32(i), UInt32(i + 1), UInt32(i + 2))
+            else
+                push!(indices, UInt32(i + 1), UInt32(i), UInt32(i + 2))
+            end
+        end
+        return indices
+    elseif mode == 6  # TRIANGLE_FAN
+        indices = UInt32[]
+        for i in 1:(num_vertices - 2)
+            push!(indices, UInt32(0), UInt32(i), UInt32(i + 1))
+        end
+        return indices
+    else  # TRIANGLES (mode 4) and default
+        return UInt32.(0:(num_vertices - 1))
+    end
+end
 
 function _extract_gltf_mesh(gltf::GLTFLib.Object, prim::GLTFLib.Primitive, buffers_data::Vector{Vector{UInt8}})
     positions = Point3f[]
@@ -228,6 +384,10 @@ function _extract_gltf_mesh(gltf::GLTFLib.Object, prim::GLTFLib.Primitive, buffe
     # Indices
     if prim.indices !== nothing
         indices = _read_index_data(gltf, prim.indices, buffers_data)
+    elseif !isempty(positions)
+        # Fallback: generate sequential indices for non-indexed primitives
+        prim_mode = prim.mode !== nothing ? Int(prim.mode) : 4
+        indices = _generate_fallback_indices(length(positions), prim_mode)
     end
 
     # Compute normals if not provided
@@ -240,7 +400,7 @@ end
 
 # ---- Material extraction ----
 
-function _extract_gltf_material(gltf::GLTFLib.Object, prim::GLTFLib.Primitive, base_dir::String)
+function _extract_gltf_material(gltf::GLTFLib.Object, prim::GLTFLib.Primitive, base_dir::String, buffers_data::Vector{Vector{UInt8}})
     if prim.material === nothing || gltf.materials === nothing
         return MaterialComponent()
     end
@@ -255,11 +415,11 @@ function _extract_gltf_material(gltf::GLTFLib.Object, prim::GLTFLib.Primitive, b
     roughness = Float32(pbr.roughnessFactor)
 
     # Texture references
-    albedo_map = _resolve_gltf_texture(gltf, pbr.baseColorTexture, base_dir)
-    normal_map = _resolve_gltf_texture(gltf, mat.normalTexture, base_dir)
-    mr_map = _resolve_gltf_texture(gltf, pbr.metallicRoughnessTexture, base_dir)
-    ao_map = _resolve_gltf_texture(gltf, mat.occlusionTexture, base_dir)
-    emissive_map = _resolve_gltf_texture(gltf, mat.emissiveTexture, base_dir)
+    albedo_map = _resolve_gltf_texture(gltf, pbr.baseColorTexture, base_dir, buffers_data)
+    normal_map = _resolve_gltf_texture(gltf, mat.normalTexture, base_dir, buffers_data)
+    mr_map = _resolve_gltf_texture(gltf, pbr.metallicRoughnessTexture, base_dir, buffers_data)
+    ao_map = _resolve_gltf_texture(gltf, mat.occlusionTexture, base_dir, buffers_data)
+    emissive_map = _resolve_gltf_texture(gltf, mat.emissiveTexture, base_dir, buffers_data)
 
     emissive_factor = Vec3f(0, 0, 0)
     if mat.emissiveFactor !== nothing
@@ -303,7 +463,7 @@ function _extract_gltf_material(gltf::GLTFLib.Object, prim::GLTFLib.Primitive, b
     )
 end
 
-function _resolve_gltf_texture(gltf::GLTFLib.Object, tex_info, base_dir::String)
+function _resolve_gltf_texture(gltf::GLTFLib.Object, tex_info, base_dir::String, buffers_data::Vector{Vector{UInt8}})
     tex_info === nothing && return nothing
     gltf.textures === nothing && return nothing
 
@@ -312,12 +472,71 @@ function _resolve_gltf_texture(gltf::GLTFLib.Object, tex_info, base_dir::String)
 
     gltf.images === nothing && return nothing
     image = gltf.images[texture.source]
-    image.uri === nothing && return nothing
 
-    # Skip data URIs for now
-    startswith(image.uri, "data:") && return nothing
+    # Case 1: External file URI
+    if image.uri !== nothing && !startswith(image.uri, "data:")
+        return TextureRef(joinpath(base_dir, image.uri))
+    end
 
-    return TextureRef(joinpath(base_dir, image.uri))
+    # Case 2: Data URI (base64 embedded)
+    if image.uri !== nothing && startswith(image.uri, "data:")
+        return _resolve_data_uri_texture(image.uri)
+    end
+
+    # Case 3: BufferView (glb embedded)
+    if image.uri === nothing && image.bufferView !== nothing
+        return _resolve_bufferview_texture(gltf, image, buffers_data)
+    end
+
+    return nothing
+end
+
+"""Decode a data-URI image and return a TextureRef pointing to a temp file."""
+function _resolve_data_uri_texture(uri::String)
+    # Parse MIME type from data:[<MIME>][;base64],<data>
+    mime_match = match(r"^data:([^;,]+)", uri)
+    mime_type = mime_match !== nothing ? mime_match.captures[1] : "image/png"
+
+    data_start = findfirst(',', uri)
+    data_start === nothing && return nothing
+    encoded = uri[data_start+1:end]
+    decoded = base64decode(encoded)
+
+    ext = _mime_to_ext(mime_type)
+    tmp_path = tempname() * ext
+    write(tmp_path, decoded)
+
+    return TextureRef(tmp_path)
+end
+
+"""Extract an image from a glTF bufferView and return a TextureRef pointing to a temp file."""
+function _resolve_bufferview_texture(gltf::GLTFLib.Object, image, buffers_data::Vector{Vector{UInt8}})
+    bv = gltf.bufferViews[image.bufferView]
+    buf_data = buffers_data[bv.buffer + 1]  # 0-based to 1-based
+
+    offset = something(bv.byteOffset, 0)
+    len = bv.byteLength
+    image_data = buf_data[offset+1:offset+len]  # +1 for Julia 1-based
+
+    mime_type = image.mimeType !== nothing ? image.mimeType : "image/png"
+    ext = _mime_to_ext(mime_type)
+    tmp_path = tempname() * ext
+    write(tmp_path, image_data)
+
+    return TextureRef(tmp_path)
+end
+
+"""Map MIME type to file extension."""
+function _mime_to_ext(mime::String)
+    if contains(mime, "png")
+        return ".png"
+    elseif contains(mime, "jpeg") || contains(mime, "jpg")
+        return ".jpg"
+    elseif contains(mime, "webp")
+        return ".webp"
+    else
+        return ".png"
+    end
 end
 
 # ---- Animation extraction ----

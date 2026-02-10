@@ -32,6 +32,7 @@ end
 
 function initialize!(backend::OpenGLBackend;
                      width::Int=1280, height::Int=720, title::String="OpenReality")
+    ensure_glfw_init!()
     backend.window = Window(width=width, height=height, title=title)
     create_window!(backend.window)
 
@@ -115,6 +116,7 @@ function shutdown!(backend::OpenGLBackend)
         destroy_window!(backend.window)
         backend.window = nothing
     end
+    glfw_terminate!()
     backend.initialized = false
     return nothing
 end
@@ -258,7 +260,12 @@ function render_gbuffer_pass!(backend::OpenGLBackend, pipeline::DeferredPipeline
     glDepthFunc(GL_LESS)
     glEnable(GL_CULL_FACE)
     glDisable(GL_BLEND)
+    # Reset active texture unit (IBL creation may leave it on a high unit)
+    glActiveTexture(GL_TEXTURE0)
 
+    # Clear G-buffer with zeros — alpha channels hold material data (metallic, roughness, AO)
+    # so they must be 0.0 for background pixels, not inherited from glClearColor
+    glClearColor(0.0f0, 0.0f0, 0.0f0, 0.0f0)
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
     # Render each opaque entity
@@ -308,6 +315,7 @@ function render_gbuffer_pass!(backend::OpenGLBackend, pipeline::DeferredPipeline
         glBindVertexArray(gpu_mesh.vao)
         glDrawElements(GL_TRIANGLES, gpu_mesh.index_count, GL_UNSIGNED_INT, C_NULL)
         glBindVertexArray(GLuint(0))
+
     end
 
     unbind_framebuffer!()
@@ -577,11 +585,6 @@ function render_frame!(backend::OpenGLBackend, scene::Scene)
         end
     end
 
-    # Debug: Log entity counts (first frame only)
-    if !haskey(backend.bounds_cache, EntityID(0xFFFFFFFFFFFFFFFF))
-        @info "Rendering stats" opaque=length(opaque_entities) transparent=length(transparent_entities)
-        backend.bounds_cache[EntityID(0xFFFFFFFFFFFFFFFF)] = BoundingSphere(Vec3f(0,0,0), 0.0f0)
-    end
 
     # ==================================================================
     # DEFERRED RENDERING PATH
@@ -691,14 +694,32 @@ function render_frame!(backend::OpenGLBackend, scene::Scene)
             set_uniform!(sp, "u_CameraPos", cam_pos)
             set_uniform!(sp, "u_LightSpaceMatrix", light_space)
 
-            # Shadow map
-            if has_shadows && backend.shadow_map !== nothing
+            # Cascaded Shadow Maps — reuse the CSM textures generated in the deferred path
+            if has_shadows && backend.csm !== nothing
+                next_unit = Int32(7)  # Start after material texture units (0-6)
+                for i in 1:backend.csm.num_cascades
+                    glActiveTexture(GL_TEXTURE0 + UInt32(next_unit + i - 1))
+                    glBindTexture(GL_TEXTURE_2D, backend.csm.cascade_textures[i])
+                    set_uniform!(sp, "u_CascadeShadowMaps[$(i - 1)]", Int32(next_unit + i - 1))
+                end
+                for i in 1:backend.csm.num_cascades
+                    set_uniform!(sp, "u_CascadeMatrices[$(i - 1)]", backend.csm.cascade_matrices[i])
+                end
+                for i in 1:(backend.csm.num_cascades + 1)
+                    set_uniform!(sp, "u_CascadeSplits[$(i - 1)]", backend.csm.split_distances[i])
+                end
+                set_uniform!(sp, "u_NumCascades", Int32(backend.csm.num_cascades))
+                set_uniform!(sp, "u_HasShadows", Int32(1))
+            elseif has_shadows && backend.shadow_map !== nothing
+                # Fallback to single shadow map
                 glActiveTexture(GL_TEXTURE6)
                 glBindTexture(GL_TEXTURE_2D, backend.shadow_map.depth_texture)
                 set_uniform!(sp, "u_ShadowMap", Int32(6))
+                set_uniform!(sp, "u_NumCascades", Int32(0))
                 set_uniform!(sp, "u_HasShadows", Int32(1))
             else
                 set_uniform!(sp, "u_HasShadows", Int32(0))
+                set_uniform!(sp, "u_NumCascades", Int32(0))
             end
 
             # Lights
@@ -740,14 +761,31 @@ function render_frame!(backend::OpenGLBackend, scene::Scene)
         set_uniform!(sp, "u_CameraPos", cam_pos)
         set_uniform!(sp, "u_LightSpaceMatrix", light_space)
 
-        # Shadow map binding
-        if has_shadows && backend.shadow_map !== nothing
+        # Shadow map binding (CSM preferred, single-map fallback)
+        if has_shadows && backend.csm !== nothing
+            next_unit = Int32(7)
+            for i in 1:backend.csm.num_cascades
+                glActiveTexture(GL_TEXTURE0 + UInt32(next_unit + i - 1))
+                glBindTexture(GL_TEXTURE_2D, backend.csm.cascade_textures[i])
+                set_uniform!(sp, "u_CascadeShadowMaps[$(i - 1)]", Int32(next_unit + i - 1))
+            end
+            for i in 1:backend.csm.num_cascades
+                set_uniform!(sp, "u_CascadeMatrices[$(i - 1)]", backend.csm.cascade_matrices[i])
+            end
+            for i in 1:(backend.csm.num_cascades + 1)
+                set_uniform!(sp, "u_CascadeSplits[$(i - 1)]", backend.csm.split_distances[i])
+            end
+            set_uniform!(sp, "u_NumCascades", Int32(backend.csm.num_cascades))
+            set_uniform!(sp, "u_HasShadows", Int32(1))
+        elseif has_shadows && backend.shadow_map !== nothing
             glActiveTexture(GL_TEXTURE6)
             glBindTexture(GL_TEXTURE_2D, backend.shadow_map.depth_texture)
             set_uniform!(sp, "u_ShadowMap", Int32(6))
+            set_uniform!(sp, "u_NumCascades", Int32(0))
             set_uniform!(sp, "u_HasShadows", Int32(1))
         else
             set_uniform!(sp, "u_HasShadows", Int32(0))
+            set_uniform!(sp, "u_NumCascades", Int32(0))
         end
 
         # Light uniforms

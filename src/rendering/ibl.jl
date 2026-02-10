@@ -514,8 +514,8 @@ function render_procedural_sky_to_cubemap!(cubemap::GLuint, size::Int)
     glGenFramebuffers(1, fbo_ref)
     fbo = fbo_ref[]
 
-    # Projection matrix for 90° FOV cubemap
-    projection = perspective_matrix(Float32(π/2), 1.0f0, 0.1f0, 10.0f0)
+    # Projection matrix for 90° FOV cubemap (perspective_matrix expects degrees)
+    projection = perspective_matrix(90.0f0, 1.0f0, 0.1f0, 10.0f0)
 
     # View matrices for each cubemap face
     view_matrices = [
@@ -529,6 +529,7 @@ function render_procedural_sky_to_cubemap!(cubemap::GLuint, size::Int)
 
     glBindFramebuffer(GL_FRAMEBUFFER, fbo)
     glViewport(0, 0, size, size)
+    glDisable(GL_CULL_FACE)  # Render all cube faces (inside of the cube)
 
     glUseProgram(sky_shader.id)
     set_uniform!(sky_shader, "u_Projection", projection)
@@ -538,7 +539,7 @@ function render_procedural_sky_to_cubemap!(cubemap::GLuint, size::Int)
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                                GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, cubemap, 0)
 
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        glClear(GL_COLOR_BUFFER_BIT)
 
         set_uniform!(sky_shader, "u_View", view_matrices[face + 1])
 
@@ -548,6 +549,7 @@ function render_procedural_sky_to_cubemap!(cubemap::GLuint, size::Int)
     end
 
     # Cleanup
+    glEnable(GL_CULL_FACE)  # Restore face culling
     glBindFramebuffer(GL_FRAMEBUFFER, GLuint(0))
     glDeleteFramebuffers(1, Ref(fbo))
     glDeleteVertexArrays(1, Ref(cube_vao))
@@ -773,8 +775,8 @@ function render_convolution_to_cubemap!(
     glGenFramebuffers(1, fbo_ref)
     fbo = fbo_ref[]
 
-    # Projection matrix for 90° FOV cubemap
-    projection = perspective_matrix(Float32(π/2), 1.0f0, 0.1f0, 10.0f0)
+    # Projection matrix for 90° FOV cubemap (perspective_matrix expects degrees)
+    projection = perspective_matrix(90.0f0, 1.0f0, 0.1f0, 10.0f0)
 
     # View matrices for each cubemap face
     view_matrices = [
@@ -788,6 +790,7 @@ function render_convolution_to_cubemap!(
 
     glBindFramebuffer(GL_FRAMEBUFFER, fbo)
     glViewport(0, 0, size, size)
+    glDisable(GL_CULL_FACE)  # Render all cube faces (inside of the cube)
 
     glUseProgram(conv_shader.id)
     set_uniform!(conv_shader, "u_Projection", projection)
@@ -807,7 +810,7 @@ function render_convolution_to_cubemap!(
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
                                GL_TEXTURE_CUBE_MAP_POSITIVE_X + face, target_cubemap, mip_level)
 
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        glClear(GL_COLOR_BUFFER_BIT)
 
         set_uniform!(conv_shader, "u_View", view_matrices[face + 1])
 
@@ -817,6 +820,7 @@ function render_convolution_to_cubemap!(
     end
 
     # Cleanup
+    glEnable(GL_CULL_FACE)  # Restore face culling
     glBindFramebuffer(GL_FRAMEBUFFER, GLuint(0))
     glDeleteFramebuffers(1, Ref(fbo))
     glDeleteVertexArrays(1, Ref(cube_vao))

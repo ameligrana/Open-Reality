@@ -2,6 +2,38 @@
 
 import GLFW
 
+# Module-level flag to ensure GLFW.Init/Terminate runs once per process
+const _GLFW_INITIALIZED = Ref(false)
+
+"""
+    ensure_glfw_init!()
+
+Call GLFW.Init() if not already initialized. Guards against failure.
+Safe to call multiple times — only the first invocation initializes.
+"""
+function ensure_glfw_init!()
+    _GLFW_INITIALIZED[] && return nothing
+    result = GLFW.Init()
+    if result == false
+        error("GLFW.Init() failed — cannot create an OpenGL context")
+    end
+    _GLFW_INITIALIZED[] = true
+    return nothing
+end
+
+"""
+    glfw_terminate!()
+
+Call GLFW.Terminate() if GLFW was previously initialized.
+Safe to call multiple times — only terminates once.
+"""
+function glfw_terminate!()
+    _GLFW_INITIALIZED[] || return nothing
+    GLFW.Terminate()
+    _GLFW_INITIALIZED[] = false
+    return nothing
+end
+
 """
     Window
 

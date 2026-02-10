@@ -175,6 +175,11 @@ function scene(entity_defs::Vector)::Scene
         s = add_entity_from_def(s, entity_def, nothing)
     end
 
+    # Replace placeholder DFS-order indices in AnimationChannels with real EntityIDs.
+    # Loaders (e.g. load_gltf) store 1-based DFS positions as placeholder EntityIDs;
+    # s.entities is in DFS creation order, so the mapping is direct.
+    _remap_animation_targets!(s.entities)
+
     return s
 end
 
@@ -240,6 +245,56 @@ function add_entity_from_def(scene::Scene, entity_def::EntityDef, parent::Union{
     end
 
     return scene
+end
+
+# =============================================================================
+# Animation Target Remapping
+# =============================================================================
+
+"""
+    _remap_animation_targets!(entity_ids::Vector{EntityID})
+
+Replace placeholder entity-def indices stored in AnimationChannel.target_entity
+with the real EntityIDs that were assigned during scene creation.
+
+Placeholder IDs use the convention `EntityID(def_index)` where `def_index` is
+the 1-based position in the original `entity_defs` vector.
+"""
+function _remap_animation_targets!(entity_ids::Vector{EntityID})
+    isempty(entity_ids) && return nothing
+
+    for eid in entity_ids
+        anim = get_component(eid, AnimationComponent)
+        anim === nothing && continue
+
+        new_clips = AnimationClip[]
+        changed = false
+
+        for clip in anim.clips
+            new_channels = AnimationChannel[]
+            for ch in clip.channels
+                placeholder_idx = Int(ch.target_entity)
+                if placeholder_idx >= 1 && placeholder_idx <= length(entity_ids)
+                    real_id = entity_ids[placeholder_idx]
+                    if real_id != ch.target_entity
+                        push!(new_channels, AnimationChannel(
+                            real_id, ch.target_property, ch.times, ch.values, ch.interpolation
+                        ))
+                        changed = true
+                        continue
+                    end
+                end
+                push!(new_channels, ch)
+            end
+            push!(new_clips, AnimationClip(clip.name, new_channels, clip.duration))
+        end
+
+        if changed
+            anim.clips = new_clips
+        end
+    end
+
+    return nothing
 end
 
 # =============================================================================
