@@ -127,9 +127,9 @@ function sphere_mesh(; radius::Float32 = 0.5f0, segments::Int = 32, rings::Int =
             c = UInt32(a + 1)
             d = UInt32(b + 1)
 
-            # Two triangles per quad
-            append!(indices, [a, b, c])
-            append!(indices, [c, b, d])
+            # Two triangles per quad (CCW winding from outside)
+            append!(indices, [a, c, b])
+            append!(indices, [c, d, b])
         end
     end
 
