@@ -79,8 +79,9 @@ function initialize!(backend::MetalBackend;
         end
     end)
 
-    # Get NSWindow handle from GLFW and initialize Metal
-    nswindow = GLFW.GetCocoaWindow(backend.window.handle)
+    # Get NSWindow handle from GLFW (not wrapped in Julia GLFW package, use direct ccall)
+    nswindow = ccall((:glfwGetCocoaWindow, GLFW.libglfw), Ptr{Cvoid}, (GLFW.Window,), backend.window.handle)
+    nswindow == C_NULL && error("glfwGetCocoaWindow returned NULL — Metal requires macOS with a Cocoa window")
     backend.device_handle = metal_init(nswindow, Int32(width), Int32(height))
     backend.width = width
     backend.height = height

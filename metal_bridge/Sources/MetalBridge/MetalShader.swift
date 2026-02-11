@@ -7,7 +7,7 @@ import Metal
 /// Julia calls this via ccall. The pipeline is stored in the global registry and a
 /// handle is returned. Returns 0 on any failure (compilation error, missing functions, etc.).
 @_cdecl("metal_create_render_pipeline")
-func metal_create_render_pipeline(
+public func metal_create_render_pipeline(
     _ mslSource: UnsafePointer<CChar>,
     _ vertexFunc: UnsafePointer<CChar>,
     _ fragmentFunc: UnsafePointer<CChar>,
@@ -16,6 +16,10 @@ func metal_create_render_pipeline(
     _ depthFormat: UInt32,
     _ blendEnabled: Int32
 ) -> UInt64 {
+    let vertexName_ = String(cString: vertexFunc)
+    let fragmentName_ = String(cString: fragmentFunc)
+    print("[MetalShader] Creating pipeline: vert=\(vertexName_) frag=\(fragmentName_) colors=\(numColorAttachments) depthFmt=\(depthFormat) blend=\(blendEnabled)")
+
     guard let deviceWrapper = globalDevice else {
         print("[MetalShader] ERROR: globalDevice is nil — call metal_init first")
         return 0
@@ -74,8 +78,9 @@ func metal_create_render_pipeline(
         }
     }
 
-    // Configure depth attachment.
-    if let depthBridgeFormat = MetalPixelFormat(rawValue: depthFormat) {
+    // Configure depth attachment (only if a depth-renderable format is specified).
+    if let depthBridgeFormat = MetalPixelFormat(rawValue: depthFormat),
+       depthBridgeFormat == .depth32Float {
         descriptor.depthAttachmentPixelFormat = toMTLPixelFormat(depthBridgeFormat)
     }
 
@@ -96,7 +101,7 @@ func metal_create_render_pipeline(
 
 /// Destroy a previously created render pipeline, releasing the Metal resources.
 @_cdecl("metal_destroy_render_pipeline")
-func metal_destroy_render_pipeline(_ handle: UInt64) {
+public func metal_destroy_render_pipeline(_ handle: UInt64) {
     registry.remove(handle)
 }
 
@@ -110,7 +115,7 @@ func metal_destroy_render_pipeline(_ handle: UInt64) {
 ///   - depthWrite: Non-zero to enable depth writes.
 /// - Returns: Handle to the new depth/stencil state, or 0 on failure.
 @_cdecl("metal_create_depth_stencil_state")
-func metal_create_depth_stencil_state(
+public func metal_create_depth_stencil_state(
     _ deviceHandle: UInt64,
     _ depthCompare: UInt32,
     _ depthWrite: Int32
@@ -152,7 +157,7 @@ func metal_create_depth_stencil_state(
 ///
 /// - Returns: Handle to the new sampler state, or 0 on failure.
 @_cdecl("metal_create_sampler")
-func metal_create_sampler(
+public func metal_create_sampler(
     _ deviceHandle: UInt64,
     _ minFilter: Int32,
     _ magFilter: Int32,

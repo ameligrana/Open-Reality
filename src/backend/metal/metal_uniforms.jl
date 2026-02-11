@@ -73,7 +73,7 @@ end
 
 function pack_material(mat::MaterialComponent)
     MetalMaterialUniforms(
-        (mat.color[1], mat.color[2], mat.color[3], mat.opacity),
+        (mat.color.r, mat.color.g, mat.color.b, mat.opacity),
         mat.metallic,
         mat.roughness,
         1.0f0,  # default AO
@@ -149,7 +149,7 @@ function pack_lights(light_data::FrameLightData)
             col = light_data.point_colors[i]
             MetalPointLightData(
                 (pos[1], pos[2], pos[3], 0.0f0),
-                (col[1], col[2], col[3], 0.0f0),
+                (col.r, col.g, col.b, 0.0f0),
                 light_data.point_intensities[i],
                 light_data.point_ranges[i],
                 0.0f0, 0.0f0
@@ -165,7 +165,7 @@ function pack_lights(light_data::FrameLightData)
             col = light_data.dir_colors[i]
             MetalDirLightData(
                 (dir[1], dir[2], dir[3], 0.0f0),
-                (col[1], col[2], col[3], 0.0f0),
+                (col.r, col.g, col.b, 0.0f0),
                 light_data.dir_intensities[i],
                 0.0f0, 0.0f0, 0.0f0
             )
@@ -179,7 +179,7 @@ function pack_lights(light_data::FrameLightData)
         dir_lights,
         Int32(length(light_data.point_positions)),
         Int32(length(light_data.dir_directions)),
-        light_data.ibl_enabled ? Int32(1) : Int32(0),
+        light_data.has_ibl ? Int32(1) : Int32(0),
         light_data.ibl_intensity
     )
 end

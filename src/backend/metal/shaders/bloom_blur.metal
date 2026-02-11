@@ -32,7 +32,7 @@ fragment float4 blur_fragment(
     texture2d<float> image [[texture(0)]],
     sampler texSampler [[sampler(0)]]
 ) {
-    constant float weights[5] = {0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216};
+    constexpr float weights[5] = {0.227027, 0.1945946, 0.1216216, 0.054054, 0.016216};
 
     float2 texelSize = 1.0 / float2(image.get_width(), image.get_height());
     float3 result = image.sample(texSampler, in.texCoord).rgb * weights[0];

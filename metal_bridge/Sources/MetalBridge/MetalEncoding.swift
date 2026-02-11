@@ -15,7 +15,7 @@ import QuartzCore
 ///   - clearDepth: Clear depth value (used when loadAction == clear).
 /// - Returns: Handle to a MetalRenderEncoderWrapper.
 @_cdecl("metal_begin_render_pass")
-func metal_begin_render_pass(
+public func metal_begin_render_pass(
     _ cmdBufHandle: UInt64,
     _ rtHandle: UInt64,
     _ loadAction: UInt32,
@@ -86,7 +86,7 @@ func metal_begin_render_pass(
 ///   - clearR/G/B/A: Clear color components.
 /// - Returns: Handle to a MetalRenderEncoderWrapper.
 @_cdecl("metal_begin_render_pass_drawable")
-func metal_begin_render_pass_drawable(
+public func metal_begin_render_pass_drawable(
     _ cmdBufHandle: UInt64,
     _ loadAction: UInt32,
     _ clearR: Float,
@@ -134,7 +134,7 @@ func metal_begin_render_pass_drawable(
 ///
 /// - Parameter encoderHandle: Handle to a MetalRenderEncoderWrapper.
 @_cdecl("metal_end_render_pass")
-func metal_end_render_pass(_ encoderHandle: UInt64) {
+public func metal_end_render_pass(_ encoderHandle: UInt64) {
     guard let wrapper: MetalRenderEncoderWrapper = registry.get(encoderHandle) else {
         print("[MetalEncoding] ERROR: Invalid encoder handle \(encoderHandle)")
         return
@@ -152,7 +152,7 @@ func metal_end_render_pass(_ encoderHandle: UInt64) {
 ///   - encoderHandle: Handle to a MetalRenderEncoderWrapper.
 ///   - pipelineHandle: Handle to a MetalRenderPipelineWrapper.
 @_cdecl("metal_set_render_pipeline")
-func metal_set_render_pipeline(_ encoderHandle: UInt64, _ pipelineHandle: UInt64) {
+public func metal_set_render_pipeline(_ encoderHandle: UInt64, _ pipelineHandle: UInt64) {
     guard let encoderWrapper: MetalRenderEncoderWrapper = registry.get(encoderHandle) else {
         print("[MetalEncoding] ERROR: Invalid encoder handle \(encoderHandle)")
         return
@@ -176,7 +176,7 @@ func metal_set_render_pipeline(_ encoderHandle: UInt64, _ pipelineHandle: UInt64
 ///   - offset: Byte offset into the buffer.
 ///   - index: Buffer index in the vertex shader argument table.
 @_cdecl("metal_set_vertex_buffer")
-func metal_set_vertex_buffer(_ encoderHandle: UInt64, _ bufferHandle: UInt64, _ offset: Int, _ index: Int32) {
+public func metal_set_vertex_buffer(_ encoderHandle: UInt64, _ bufferHandle: UInt64, _ offset: Int, _ index: Int32) {
     guard let encoderWrapper: MetalRenderEncoderWrapper = registry.get(encoderHandle) else {
         print("[MetalEncoding] ERROR: Invalid encoder handle \(encoderHandle)")
         return
@@ -200,7 +200,7 @@ func metal_set_vertex_buffer(_ encoderHandle: UInt64, _ bufferHandle: UInt64, _ 
 ///   - offset: Byte offset into the buffer.
 ///   - index: Buffer index in the fragment shader argument table.
 @_cdecl("metal_set_fragment_buffer")
-func metal_set_fragment_buffer(_ encoderHandle: UInt64, _ bufferHandle: UInt64, _ offset: Int, _ index: Int32) {
+public func metal_set_fragment_buffer(_ encoderHandle: UInt64, _ bufferHandle: UInt64, _ offset: Int, _ index: Int32) {
     guard let encoderWrapper: MetalRenderEncoderWrapper = registry.get(encoderHandle) else {
         print("[MetalEncoding] ERROR: Invalid encoder handle \(encoderHandle)")
         return
@@ -223,7 +223,7 @@ func metal_set_fragment_buffer(_ encoderHandle: UInt64, _ bufferHandle: UInt64, 
 ///   - textureHandle: Handle to a MetalTextureWrapper.
 ///   - index: Texture index in the fragment shader argument table.
 @_cdecl("metal_set_fragment_texture")
-func metal_set_fragment_texture(_ encoderHandle: UInt64, _ textureHandle: UInt64, _ index: Int32) {
+public func metal_set_fragment_texture(_ encoderHandle: UInt64, _ textureHandle: UInt64, _ index: Int32) {
     guard let encoderWrapper: MetalRenderEncoderWrapper = registry.get(encoderHandle) else {
         print("[MetalEncoding] ERROR: Invalid encoder handle \(encoderHandle)")
         return
@@ -246,7 +246,7 @@ func metal_set_fragment_texture(_ encoderHandle: UInt64, _ textureHandle: UInt64
 ///   - textureHandle: Handle to a MetalTextureWrapper.
 ///   - index: Texture index in the vertex shader argument table.
 @_cdecl("metal_set_vertex_texture")
-func metal_set_vertex_texture(_ encoderHandle: UInt64, _ textureHandle: UInt64, _ index: Int32) {
+public func metal_set_vertex_texture(_ encoderHandle: UInt64, _ textureHandle: UInt64, _ index: Int32) {
     guard let encoderWrapper: MetalRenderEncoderWrapper = registry.get(encoderHandle) else {
         print("[MetalEncoding] ERROR: Invalid encoder handle \(encoderHandle)")
         return
@@ -269,7 +269,7 @@ func metal_set_vertex_texture(_ encoderHandle: UInt64, _ textureHandle: UInt64, 
 ///   - samplerHandle: Handle to a MetalSamplerWrapper.
 ///   - index: Sampler index in the fragment shader argument table.
 @_cdecl("metal_set_fragment_sampler")
-func metal_set_fragment_sampler(_ encoderHandle: UInt64, _ samplerHandle: UInt64, _ index: Int32) {
+public func metal_set_fragment_sampler(_ encoderHandle: UInt64, _ samplerHandle: UInt64, _ index: Int32) {
     guard let encoderWrapper: MetalRenderEncoderWrapper = registry.get(encoderHandle) else {
         print("[MetalEncoding] ERROR: Invalid encoder handle \(encoderHandle)")
         return
@@ -291,7 +291,7 @@ func metal_set_fragment_sampler(_ encoderHandle: UInt64, _ samplerHandle: UInt64
 ///   - encoderHandle: Handle to a MetalRenderEncoderWrapper.
 ///   - stateHandle: Handle to a MetalDepthStencilWrapper.
 @_cdecl("metal_set_depth_stencil_state")
-func metal_set_depth_stencil_state(_ encoderHandle: UInt64, _ stateHandle: UInt64) {
+public func metal_set_depth_stencil_state(_ encoderHandle: UInt64, _ stateHandle: UInt64) {
     guard let encoderWrapper: MetalRenderEncoderWrapper = registry.get(encoderHandle) else {
         print("[MetalEncoding] ERROR: Invalid encoder handle \(encoderHandle)")
         return
@@ -313,7 +313,7 @@ func metal_set_depth_stencil_state(_ encoderHandle: UInt64, _ stateHandle: UInt6
 ///   - encoderHandle: Handle to a MetalRenderEncoderWrapper.
 ///   - mode: Cull mode (MetalCullMode raw value).
 @_cdecl("metal_set_cull_mode")
-func metal_set_cull_mode(_ encoderHandle: UInt64, _ mode: UInt32) {
+public func metal_set_cull_mode(_ encoderHandle: UInt64, _ mode: UInt32) {
     guard let encoderWrapper: MetalRenderEncoderWrapper = registry.get(encoderHandle) else {
         print("[MetalEncoding] ERROR: Invalid encoder handle \(encoderHandle)")
         return
@@ -337,7 +337,7 @@ func metal_set_cull_mode(_ encoderHandle: UInt64, _ mode: UInt32) {
 ///   - width/height: Dimensions of the viewport.
 ///   - znear/zfar: Depth range.
 @_cdecl("metal_set_viewport")
-func metal_set_viewport(
+public func metal_set_viewport(
     _ encoderHandle: UInt64,
     _ x: Double,
     _ y: Double,
@@ -374,7 +374,7 @@ func metal_set_viewport(
 ///   - indexBufferHandle: Handle to a MetalBufferWrapper containing index data.
 ///   - indexBufferOffset: Byte offset into the index buffer.
 @_cdecl("metal_draw_indexed")
-func metal_draw_indexed(
+public func metal_draw_indexed(
     _ encoderHandle: UInt64,
     _ primitiveType: UInt32,
     _ indexCount: Int32,
@@ -415,7 +415,7 @@ func metal_draw_indexed(
 ///   - vertexStart: First vertex to draw.
 ///   - vertexCount: Number of vertices to draw.
 @_cdecl("metal_draw_primitives")
-func metal_draw_primitives(_ encoderHandle: UInt64, _ primitiveType: UInt32, _ vertexStart: Int32, _ vertexCount: Int32) {
+public func metal_draw_primitives(_ encoderHandle: UInt64, _ primitiveType: UInt32, _ vertexStart: Int32, _ vertexCount: Int32) {
     guard let encoderWrapper: MetalRenderEncoderWrapper = registry.get(encoderHandle) else {
         print("[MetalEncoding] ERROR: Invalid encoder handle \(encoderHandle)")
         return
@@ -442,7 +442,7 @@ func metal_draw_primitives(_ encoderHandle: UInt64, _ primitiveType: UInt32, _ v
 ///   - x/y: Origin of the scissor rectangle.
 ///   - width/height: Dimensions of the scissor rectangle.
 @_cdecl("metal_set_scissor_rect")
-func metal_set_scissor_rect(_ encoderHandle: UInt64, _ x: Int32, _ y: Int32, _ width: Int32, _ height: Int32) {
+public func metal_set_scissor_rect(_ encoderHandle: UInt64, _ x: Int32, _ y: Int32, _ width: Int32, _ height: Int32) {
     guard let encoderWrapper: MetalRenderEncoderWrapper = registry.get(encoderHandle) else {
         print("[MetalEncoding] ERROR: Invalid encoder handle \(encoderHandle)")
         return
@@ -472,7 +472,7 @@ func metal_set_scissor_rect(_ encoderHandle: UInt64, _ x: Int32, _ y: Int32, _ w
 ///   - clearR/G/B/A: Clear color components.
 /// - Returns: Handle to a MetalRenderEncoderWrapper.
 @_cdecl("metal_begin_render_pass_cube_face")
-func metal_begin_render_pass_cube_face(
+public func metal_begin_render_pass_cube_face(
     _ cmdBufHandle: UInt64,
     _ cubeTextureHandle: UInt64,
     _ face: Int32,
@@ -531,7 +531,7 @@ func metal_begin_render_pass_cube_face(
 ///   - clearR/G/B/A: Clear color components.
 /// - Returns: Handle to a MetalRenderEncoderWrapper.
 @_cdecl("metal_begin_render_pass_texture")
-func metal_begin_render_pass_texture(
+public func metal_begin_render_pass_texture(
     _ cmdBufHandle: UInt64,
     _ textureHandle: UInt64,
     _ loadAction: UInt32,

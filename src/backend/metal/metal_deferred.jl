@@ -29,16 +29,19 @@ function metal_create_deferred_pipeline!(pipeline::MetalDeferredPipeline, device
         MTL_PIXEL_FORMAT_RGBA8_UNORM
     ]
     pipeline.gbuffer_shader_library = ShaderLibrary{MetalShaderProgram}(
-        "", gbuffer_msl,
-        (vert, frag, key) -> metal_compile_shader_variant(
-            vert, frag, key;
-            num_color_attachments=Int32(4),
-            color_formats=gbuffer_color_formats,
-            depth_format=MTL_PIXEL_FORMAT_DEPTH32_FLOAT,
-            blend_enabled=Int32(0),
-            vertex_func="gbuffer_vertex",
-            fragment_func="gbuffer_fragment"
-        )
+        "gbuffer", gbuffer_msl, gbuffer_msl,
+        (vert_src, frag_src) -> begin
+            # ShaderLibrary already inserts #defines into the source.
+            # For MSL, vert_src and frag_src are the same file with defines prepended.
+            handle = metal_get_or_create_pipeline(
+                frag_src, "gbuffer_vertex", "gbuffer_fragment";
+                num_color_attachments=Int32(4),
+                color_formats=gbuffer_color_formats,
+                depth_format=MTL_PIXEL_FORMAT_DEPTH32_FLOAT,
+                blend_enabled=Int32(0)
+            )
+            MetalShaderProgram(handle, "gbuffer_vertex", "gbuffer_fragment")
+        end
     )
 
     # Fullscreen quad vertex buffer (6 vertices: xy=position, zw=uv)
@@ -131,43 +134,45 @@ function metal_render_gbuffer_pass!(backend, pipeline::MetalDeferredPipeline,
     # Default sampler
     default_sampler = metal_create_sampler(backend.device_handle, Int32(1), Int32(1), Int32(1), Int32(0))
 
-    for (entity_id, mesh, model, normal_matrix) in opaque_entities
-        material = get_component(entity_id, MaterialComponent)
-        if material === nothing continue end
+    try
+        for (entity_id, mesh, model, normal_matrix) in opaque_entities
+            material = get_component(entity_id, MaterialComponent)
+            if material === nothing continue end
 
-        # Select shader variant
-        variant_key = determine_shader_variant(material)
-        sp = get_or_compile_variant!(pipeline.gbuffer_shader_library, variant_key)
+            # Select shader variant
+            variant_key = determine_shader_variant(material)
+            sp = get_or_compile_variant!(pipeline.gbuffer_shader_library, variant_key)
 
-        metal_set_render_pipeline(encoder, sp.pipeline_handle)
+            metal_set_render_pipeline(encoder, sp.pipeline_handle)
 
-        # Vertex buffers
-        metal_set_vertex_buffer(encoder, frame_buf, 0, Int32(3))
+            # Vertex buffers
+            metal_set_vertex_buffer(encoder, frame_buf, 0, Int32(3))
 
-        # Per-object uniforms
-        obj_uniforms = pack_per_object(model, normal_matrix)
-        obj_buf = _create_uniform_buffer(backend.device_handle, obj_uniforms, "gbuf_obj")
-        metal_set_vertex_buffer(encoder, obj_buf, 0, Int32(4))
+            # Per-object uniforms
+            obj_uniforms = pack_per_object(model, normal_matrix)
+            obj_buf = _create_uniform_buffer(backend.device_handle, obj_uniforms, "gbuf_obj")
+            metal_set_vertex_buffer(encoder, obj_buf, 0, Int32(4))
 
-        # Material uniforms
-        mat_uniforms = pack_material(material)
-        mat_buf = _create_uniform_buffer(backend.device_handle, mat_uniforms, "gbuf_mat")
-        metal_set_fragment_buffer(encoder, frame_buf, 0, Int32(3))
-        metal_set_fragment_buffer(encoder, mat_buf, 0, Int32(5))
+            # Material uniforms
+            mat_uniforms = pack_material(material)
+            mat_buf = _create_uniform_buffer(backend.device_handle, mat_uniforms, "gbuf_mat")
+            metal_set_fragment_buffer(encoder, frame_buf, 0, Int32(3))
+            metal_set_fragment_buffer(encoder, mat_buf, 0, Int32(5))
 
-        # Bind textures
-        metal_bind_material_textures!(encoder, material, backend.texture_cache, backend.device_handle)
-        metal_set_fragment_sampler(encoder, default_sampler, Int32(0))
+            # Bind textures
+            metal_bind_material_textures!(encoder, material, backend.texture_cache, backend.device_handle)
+            metal_set_fragment_sampler(encoder, default_sampler, Int32(0))
 
-        # Draw mesh
-        gpu_mesh = metal_get_or_upload_mesh!(backend.gpu_cache, backend.device_handle, entity_id, mesh)
-        metal_draw_mesh!(encoder, gpu_mesh)
+            # Draw mesh
+            gpu_mesh = metal_get_or_upload_mesh!(backend.gpu_cache, backend.device_handle, entity_id, mesh)
+            metal_draw_mesh!(encoder, gpu_mesh)
 
-        metal_destroy_buffer(obj_buf)
-        metal_destroy_buffer(mat_buf)
+            metal_destroy_buffer(obj_buf)
+            metal_destroy_buffer(mat_buf)
+        end
+    finally
+        metal_end_render_pass(encoder)
     end
-
-    metal_end_render_pass(encoder)
     metal_destroy_buffer(frame_buf)
 
     return nothing
@@ -184,77 +189,82 @@ function metal_render_deferred_lighting_pass!(backend, pipeline::MetalDeferredPi
                                        MTL_LOAD_CLEAR, MTL_STORE_STORE,
                                        0.0f0, 0.0f0, 0.0f0, 0.0f0, 1.0)
 
-    metal_set_render_pipeline(encoder, pipeline.lighting_pipeline)
+    frame_buf = UInt64(0)
+    light_buf = UInt64(0)
+    shadow_buf = UInt64(0)
+    try
+        metal_set_render_pipeline(encoder, pipeline.lighting_pipeline)
 
-    # No depth test for fullscreen quad
-    ds_state = metal_create_depth_stencil_state(backend.device_handle, MTL_COMPARE_ALWAYS, Int32(0))
-    metal_set_depth_stencil_state(encoder, ds_state)
-    metal_set_cull_mode(encoder, MTL_CULL_NONE)
-    metal_set_viewport(encoder, 0.0, 0.0, Float64(rt.width), Float64(rt.height), 0.0, 1.0)
+        # No depth test for fullscreen quad
+        ds_state = metal_create_depth_stencil_state(backend.device_handle, MTL_COMPARE_ALWAYS, Int32(0))
+        metal_set_depth_stencil_state(encoder, ds_state)
+        metal_set_cull_mode(encoder, MTL_CULL_NONE)
+        metal_set_viewport(encoder, 0.0, 0.0, Float64(rt.width), Float64(rt.height), 0.0, 1.0)
 
-    # Bind quad vertex buffer
-    metal_set_vertex_buffer(encoder, pipeline.quad_vertex_buffer, 0, Int32(0))
+        # Bind quad vertex buffer
+        metal_set_vertex_buffer(encoder, pipeline.quad_vertex_buffer, 0, Int32(0))
 
-    # Per-frame uniforms
-    frame_uniforms = pack_per_frame(view, proj, cam_pos, Float32(time()))
-    frame_buf = _create_uniform_buffer(backend.device_handle, frame_uniforms, "light_frame")
-    metal_set_fragment_buffer(encoder, frame_buf, 0, Int32(3))
+        # Per-frame uniforms
+        frame_uniforms = pack_per_frame(view, proj, cam_pos, Float32(time()))
+        frame_buf = _create_uniform_buffer(backend.device_handle, frame_uniforms, "light_frame")
+        metal_set_fragment_buffer(encoder, frame_buf, 0, Int32(3))
 
-    # Light uniforms
-    light_uniforms = pack_lights(light_data)
-    light_buf = _create_uniform_buffer(backend.device_handle, light_uniforms, "lights")
-    metal_set_fragment_buffer(encoder, light_buf, 0, Int32(6))
+        # Light uniforms
+        light_uniforms = pack_lights(light_data)
+        light_buf = _create_uniform_buffer(backend.device_handle, light_uniforms, "lights")
+        metal_set_fragment_buffer(encoder, light_buf, 0, Int32(6))
 
-    # Shadow uniforms
-    has_shadows = backend.csm !== nothing && !isempty(backend.csm.cascade_matrices)
-    shadow_uniforms = if has_shadows
-        pack_shadow_uniforms(backend.csm, true)
-    else
-        MetalShadowUniforms(
-            ntuple(_ -> ntuple(_ -> 0.0f0, 16), 4),
-            ntuple(_ -> 0.0f0, 5),
-            Int32(0), Int32(0), 0.0f0
-        )
-    end
-    shadow_buf = _create_uniform_buffer(backend.device_handle, shadow_uniforms, "shadows")
-    metal_set_fragment_buffer(encoder, shadow_buf, 0, Int32(7))
-
-    # Bind G-Buffer textures
-    gb = pipeline.gbuffer
-    metal_set_fragment_texture(encoder, gb.albedo_metallic, Int32(0))
-    metal_set_fragment_texture(encoder, gb.normal_roughness, Int32(1))
-    metal_set_fragment_texture(encoder, gb.emissive_ao, Int32(2))
-    metal_set_fragment_texture(encoder, gb.depth, Int32(3))
-    metal_set_fragment_texture(encoder, gb.advanced_material, Int32(4))
-
-    # Bind CSM shadow map textures
-    if has_shadows
-        for i in 1:backend.csm.num_cascades
-            metal_set_fragment_texture(encoder, backend.csm.cascade_depth_textures[i], Int32(4 + i))
+        # Shadow uniforms
+        has_shadows = backend.csm !== nothing && !isempty(backend.csm.cascade_matrices)
+        shadow_uniforms = if has_shadows
+            pack_shadow_uniforms(backend.csm, true)
+        else
+            MetalShadowUniforms(
+                ntuple(_ -> ntuple(_ -> 0.0f0, 16), 4),
+                ntuple(_ -> 0.0f0, 5),
+                Int32(0), Int32(0), 0.0f0
+            )
         end
+        shadow_buf = _create_uniform_buffer(backend.device_handle, shadow_uniforms, "shadows")
+        metal_set_fragment_buffer(encoder, shadow_buf, 0, Int32(7))
+
+        # Bind G-Buffer textures
+        gb = pipeline.gbuffer
+        metal_set_fragment_texture(encoder, gb.albedo_metallic, Int32(0))
+        metal_set_fragment_texture(encoder, gb.normal_roughness, Int32(1))
+        metal_set_fragment_texture(encoder, gb.emissive_ao, Int32(2))
+        metal_set_fragment_texture(encoder, gb.depth, Int32(3))
+        metal_set_fragment_texture(encoder, gb.advanced_material, Int32(4))
+
+        # Bind CSM shadow map textures
+        if has_shadows
+            for i in 1:backend.csm.num_cascades
+                metal_set_fragment_texture(encoder, backend.csm.cascade_depth_textures[i], Int32(4 + i))
+            end
+        end
+
+        # Bind IBL textures if available
+        if pipeline.ibl_env !== nothing && pipeline.ibl_env.irradiance_map != UInt64(0)
+            metal_set_fragment_texture(encoder, pipeline.ibl_env.irradiance_map, Int32(9))
+            metal_set_fragment_texture(encoder, pipeline.ibl_env.prefilter_map, Int32(10))
+            metal_set_fragment_texture(encoder, pipeline.ibl_env.brdf_lut, Int32(11))
+        end
+
+        # Samplers
+        gbuf_sampler = metal_create_sampler(backend.device_handle, Int32(0), Int32(0), Int32(0), Int32(0))
+        shadow_sampler = metal_create_sampler(backend.device_handle, Int32(1), Int32(1), Int32(0), Int32(0))
+        metal_set_fragment_sampler(encoder, gbuf_sampler, Int32(0))
+        metal_set_fragment_sampler(encoder, shadow_sampler, Int32(1))
+
+        # Draw fullscreen quad
+        metal_draw_primitives(encoder, MTL_PRIMITIVE_TRIANGLE, Int32(0), Int32(6))
+    finally
+        metal_end_render_pass(encoder)
     end
 
-    # Bind IBL textures if available
-    if pipeline.ibl_env !== nothing && pipeline.ibl_env.irradiance_map != UInt64(0)
-        metal_set_fragment_texture(encoder, pipeline.ibl_env.irradiance_map, Int32(9))
-        metal_set_fragment_texture(encoder, pipeline.ibl_env.prefilter_map, Int32(10))
-        metal_set_fragment_texture(encoder, pipeline.ibl_env.brdf_lut, Int32(11))
-    end
-
-    # Samplers
-    gbuf_sampler = metal_create_sampler(backend.device_handle, Int32(0), Int32(0), Int32(0), Int32(0))  # nearest
-    shadow_sampler = metal_create_sampler(backend.device_handle, Int32(1), Int32(1), Int32(0), Int32(0))  # linear
-    metal_set_fragment_sampler(encoder, gbuf_sampler, Int32(0))
-    metal_set_fragment_sampler(encoder, shadow_sampler, Int32(1))
-
-    # Draw fullscreen quad
-    metal_draw_primitives(encoder, MTL_PRIMITIVE_TRIANGLE, Int32(0), Int32(6))
-
-    metal_end_render_pass(encoder)
-
-    metal_destroy_buffer(frame_buf)
-    metal_destroy_buffer(light_buf)
-    metal_destroy_buffer(shadow_buf)
+    frame_buf != UInt64(0) && metal_destroy_buffer(frame_buf)
+    light_buf != UInt64(0) && metal_destroy_buffer(light_buf)
+    shadow_buf != UInt64(0) && metal_destroy_buffer(shadow_buf)
 
     return nothing
 end

@@ -112,3 +112,11 @@ function metal_compile_shader_variant(vertex_template::String, fragment_template
 
     return MetalShaderProgram(handle, vertex_func, fragment_func)
 end
+
+function destroy_shader_program!(sp::MetalShaderProgram)
+    if sp.pipeline_handle != UInt64(0)
+        metal_destroy_render_pipeline(sp.pipeline_handle)
+        sp.pipeline_handle = UInt64(0)
+    end
+    return nothing
+end

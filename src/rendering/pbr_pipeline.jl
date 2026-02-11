@@ -18,7 +18,7 @@ function run_render_loop!(scene::Scene;
                           title::String = "OpenReality",
                           post_process::Union{PostProcessConfig, Nothing} = nothing)
     # Apply post_process config to backend if provided
-    if post_process !== nothing && backend isa OpenGLBackend && backend.post_process !== nothing
+    if post_process !== nothing && hasproperty(backend, :post_process) && backend.post_process !== nothing
         backend.post_process.config = post_process
     end
 

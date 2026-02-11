@@ -19,7 +19,7 @@ import Metal
 ///   - label: A null-terminated C string used as a debug label.
 /// - Returns: A handle to the new `MetalRenderTargetWrapper`.
 @_cdecl("metal_create_render_target")
-func metal_create_render_target(
+public func metal_create_render_target(
     _ deviceHandle: UInt64,
     _ width: Int32,
     _ height: Int32,
@@ -105,7 +105,7 @@ func metal_create_render_target(
 ///   - index: Zero-based color attachment index.
 /// - Returns: A handle to the `MetalTextureWrapper`, or 0 if the index is out of bounds.
 @_cdecl("metal_get_rt_color_texture")
-func metal_get_rt_color_texture(_ rtHandle: UInt64, _ index: Int32) -> UInt64 {
+public func metal_get_rt_color_texture(_ rtHandle: UInt64, _ index: Int32) -> UInt64 {
     guard let rt: MetalRenderTargetWrapper = registry.get(rtHandle) else {
         return 0
     }
@@ -130,7 +130,7 @@ func metal_get_rt_color_texture(_ rtHandle: UInt64, _ index: Int32) -> UInt64 {
 /// - Parameter rtHandle: Handle to a `MetalRenderTargetWrapper`.
 /// - Returns: A handle to the `MetalTextureWrapper`, or 0 if no depth texture exists.
 @_cdecl("metal_get_rt_depth_texture")
-func metal_get_rt_depth_texture(_ rtHandle: UInt64) -> UInt64 {
+public func metal_get_rt_depth_texture(_ rtHandle: UInt64) -> UInt64 {
     guard let rt: MetalRenderTargetWrapper = registry.get(rtHandle) else {
         return 0
     }
@@ -160,7 +160,7 @@ func metal_get_rt_depth_texture(_ rtHandle: UInt64) -> UInt64 {
 ///   - width: New width in pixels.
 ///   - height: New height in pixels.
 @_cdecl("metal_resize_render_target")
-func metal_resize_render_target(_ rtHandle: UInt64, _ width: Int32, _ height: Int32) {
+public func metal_resize_render_target(_ rtHandle: UInt64, _ width: Int32, _ height: Int32) {
     guard let rt: MetalRenderTargetWrapper = registry.get(rtHandle) else {
         return
     }
@@ -219,6 +219,6 @@ func metal_resize_render_target(_ rtHandle: UInt64, _ width: Int32, _ height: In
 ///
 /// - Parameter handle: Handle to a `MetalRenderTargetWrapper`.
 @_cdecl("metal_destroy_render_target")
-func metal_destroy_render_target(_ handle: UInt64) {
+public func metal_destroy_render_target(_ handle: UInt64) {
     registry.remove(handle)
 }

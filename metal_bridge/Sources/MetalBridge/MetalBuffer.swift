@@ -3,7 +3,7 @@ import Metal
 // MARK: - Buffer Creation
 
 @_cdecl("metal_create_buffer")
-func metal_create_buffer(_ deviceHandle: UInt64, _ data: UnsafeRawPointer?, _ length: Int, _ label: UnsafePointer<CChar>) -> UInt64 {
+public func metal_create_buffer(_ deviceHandle: UInt64, _ data: UnsafeRawPointer?, _ length: Int, _ label: UnsafePointer<CChar>) -> UInt64 {
     guard let device: MetalDeviceWrapper = globalDevice else {
         print("[MetalBuffer] ERROR: globalDevice is nil")
         return 0
@@ -31,7 +31,7 @@ func metal_create_buffer(_ deviceHandle: UInt64, _ data: UnsafeRawPointer?, _ le
 // MARK: - Buffer Update
 
 @_cdecl("metal_update_buffer")
-func metal_update_buffer(_ bufferHandle: UInt64, _ data: UnsafeRawPointer, _ offset: Int, _ length: Int) {
+public func metal_update_buffer(_ bufferHandle: UInt64, _ data: UnsafeRawPointer, _ offset: Int, _ length: Int) {
     guard let wrapper: MetalBufferWrapper = registry.get(bufferHandle) else {
         print("[MetalBuffer] ERROR: Invalid buffer handle \(bufferHandle)")
         return
@@ -43,14 +43,14 @@ func metal_update_buffer(_ bufferHandle: UInt64, _ data: UnsafeRawPointer, _ off
 // MARK: - Buffer Destruction
 
 @_cdecl("metal_destroy_buffer")
-func metal_destroy_buffer(_ handle: UInt64) {
+public func metal_destroy_buffer(_ handle: UInt64) {
     registry.remove(handle)
 }
 
 // MARK: - Buffer Contents Access
 
 @_cdecl("metal_get_buffer_contents")
-func metal_get_buffer_contents(_ bufferHandle: UInt64) -> UnsafeMutableRawPointer? {
+public func metal_get_buffer_contents(_ bufferHandle: UInt64) -> UnsafeMutableRawPointer? {
     guard let wrapper: MetalBufferWrapper = registry.get(bufferHandle) else {
         print("[MetalBuffer] ERROR: Invalid buffer handle \(bufferHandle)")
         return nil
@@ -62,7 +62,7 @@ func metal_get_buffer_contents(_ bufferHandle: UInt64) -> UnsafeMutableRawPointe
 // MARK: - Buffer Length Query
 
 @_cdecl("metal_get_buffer_length")
-func metal_get_buffer_length(_ bufferHandle: UInt64) -> Int {
+public func metal_get_buffer_length(_ bufferHandle: UInt64) -> Int {
     guard let wrapper: MetalBufferWrapper = registry.get(bufferHandle) else {
         print("[MetalBuffer] ERROR: Invalid buffer handle \(bufferHandle)")
         return 0

@@ -96,7 +96,10 @@ include("backend/opengl/opengl_postprocess.jl")   # PostProcessPipeline
 include("backend/opengl/opengl_deferred.jl")      # DeferredPipeline
 include("backend/opengl.jl")                      # OpenGLBackend, render_frame!
 
-# Metal backend implementation (macOS only)
+# Shared rendering orchestration (after backend — uses ECS + frustum culling)
+include("rendering/frame_preparation.jl")
+
+# Metal backend implementation (macOS only, after frame_preparation — uses FrameLightData)
 if Sys.isapple()
     include("backend/metal/metal_types.jl")
     include("backend/metal/metal_ffi.jl")
@@ -115,9 +118,6 @@ if Sys.isapple()
     include("backend/metal/metal_deferred.jl")
     include("backend/metal/metal_backend.jl")
 end
-
-# Shared rendering orchestration (after backend — uses ECS + frustum culling)
-include("rendering/frame_preparation.jl")
 
 # Rendering pipeline (after backend — uses backend types)
 include("rendering/pipeline.jl")
@@ -268,16 +268,19 @@ export find_active_camera, get_view_matrix, get_projection_matrix
 export load_model, load_obj, load_gltf
 
 """
-    render(scene::Scene; width=1280, height=720, title="OpenReality", post_process=nothing)
+    render(scene::Scene; backend=OpenGLBackend(), width=1280, height=720, title="OpenReality", post_process=nothing)
 
 Start the PBR render loop for the given scene.
 Opens a window and renders until closed.
+
+Pass `backend=MetalBackend()` on macOS to use the Metal renderer.
 """
 function render(scene::Scene;
+                backend::AbstractBackend = OpenGLBackend(),
                 width::Int = 1280, height::Int = 720,
                 title::String = "OpenReality",
                 post_process::Union{PostProcessConfig, Nothing} = nothing)
-    run_render_loop!(scene, width=width, height=height, title=title, post_process=post_process)
+    run_render_loop!(scene, backend=backend, width=width, height=height, title=title, post_process=post_process)
 end
 
 export render

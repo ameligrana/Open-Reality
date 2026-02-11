@@ -18,7 +18,7 @@ var globalDevice: MetalDeviceWrapper? = nil
 ///   - height: Initial drawable height in pixels.
 /// - Returns: A handle to the MetalDeviceWrapper stored in the global registry.
 @_cdecl("metal_init")
-func metal_init(_ nswindow: UnsafeMutableRawPointer, _ width: Int32, _ height: Int32) -> UInt64 {
+public func metal_init(_ nswindow: UnsafeMutableRawPointer, _ width: Int32, _ height: Int32) -> UInt64 {
     guard let device = MTLCreateSystemDefaultDevice() else {
         fatalError("metal_init: Failed to create system default Metal device.")
     }
@@ -58,7 +58,7 @@ func metal_init(_ nswindow: UnsafeMutableRawPointer, _ width: Int32, _ height: I
 ///
 /// - Parameter deviceHandle: The handle returned by `metal_init`.
 @_cdecl("metal_shutdown")
-func metal_shutdown(_ deviceHandle: UInt64) {
+public func metal_shutdown(_ deviceHandle: UInt64) {
     guard let _: MetalDeviceWrapper = registry.get(deviceHandle) else {
         return
     }
@@ -77,7 +77,7 @@ func metal_shutdown(_ deviceHandle: UInt64) {
 ///   - width: New drawable width in pixels.
 ///   - height: New drawable height in pixels.
 @_cdecl("metal_resize")
-func metal_resize(_ deviceHandle: UInt64, _ width: Int32, _ height: Int32) {
+public func metal_resize(_ deviceHandle: UInt64, _ width: Int32, _ height: Int32) {
     guard let wrapper: MetalDeviceWrapper = registry.get(deviceHandle) else {
         return
     }
@@ -92,7 +92,7 @@ func metal_resize(_ deviceHandle: UInt64, _ width: Int32, _ height: Int32) {
 /// - Parameter deviceHandle: The handle returned by `metal_init`.
 /// - Returns: A handle to a MetalCommandBufferWrapper for this frame.
 @_cdecl("metal_begin_frame")
-func metal_begin_frame(_ deviceHandle: UInt64) -> UInt64 {
+public func metal_begin_frame(_ deviceHandle: UInt64) -> UInt64 {
     guard let wrapper: MetalDeviceWrapper = registry.get(deviceHandle) else {
         fatalError("metal_begin_frame: Invalid device handle \(deviceHandle).")
     }
@@ -118,7 +118,7 @@ func metal_begin_frame(_ deviceHandle: UInt64) -> UInt64 {
 ///
 /// - Parameter cmdBufHandle: The handle returned by `metal_begin_frame`.
 @_cdecl("metal_end_frame")
-func metal_end_frame(_ cmdBufHandle: UInt64) {
+public func metal_end_frame(_ cmdBufHandle: UInt64) {
     guard let wrapper: MetalCommandBufferWrapper = registry.get(cmdBufHandle) else {
         return
     }

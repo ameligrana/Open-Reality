@@ -67,12 +67,12 @@ end
 # Buffers
 # ==================================================================
 
-function metal_create_buffer(device_handle::UInt64, data::Ptr{Cvoid}, length::Int, label::String)::UInt64
+function metal_create_buffer(device_handle::UInt64, data::Ptr, length::Int, label::String)::UInt64
     ccall((:metal_create_buffer, _metal_lib()), UInt64,
           (UInt64, Ptr{Cvoid}, Int, Cstring), device_handle, data, length, label)
 end
 
-function metal_update_buffer(buffer_handle::UInt64, data::Ptr{Cvoid}, offset::Int, length::Int)
+function metal_update_buffer(buffer_handle::UInt64, data::Ptr, offset::Int, length::Int)
     ccall((:metal_update_buffer, _metal_lib()), Cvoid,
           (UInt64, Ptr{Cvoid}, Int, Int), buffer_handle, data, offset, length)
 end
@@ -96,7 +96,7 @@ function metal_create_texture_2d(device_handle::UInt64, width::Int32, height::In
           device_handle, width, height, format, mipmapped, usage, label)
 end
 
-function metal_upload_texture_2d(texture_handle::UInt64, data::Ptr{Cvoid},
+function metal_upload_texture_2d(texture_handle::UInt64, data::Ptr,
                                   width::Int32, height::Int32, bytes_per_pixel::Int32)
     ccall((:metal_upload_texture_2d, _metal_lib()), Cvoid,
           (UInt64, Ptr{Cvoid}, Int32, Int32, Int32),
@@ -110,7 +110,7 @@ function metal_create_texture_cube(device_handle::UInt64, size::Int32, format::U
           device_handle, size, format, mipmapped, label)
 end
 
-function metal_upload_texture_cube_face(texture_handle::UInt64, face::Int32, data::Ptr{Cvoid},
+function metal_upload_texture_cube_face(texture_handle::UInt64, face::Int32, data::Ptr,
                                          size::Int32, bytes_per_pixel::Int32)
     ccall((:metal_upload_texture_cube_face, _metal_lib()), Cvoid,
           (UInt64, Int32, Ptr{Cvoid}, Int32, Int32),

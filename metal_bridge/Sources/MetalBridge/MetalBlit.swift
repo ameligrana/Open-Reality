@@ -9,7 +9,7 @@ import Metal
 ///   - srcTextureHandle: Handle to the source MetalTextureWrapper.
 ///   - dstTextureHandle: Handle to the destination MetalTextureWrapper.
 @_cdecl("metal_blit_texture")
-func metal_blit_texture(_ cmdBufHandle: UInt64, _ srcTextureHandle: UInt64, _ dstTextureHandle: UInt64) {
+public func metal_blit_texture(_ cmdBufHandle: UInt64, _ srcTextureHandle: UInt64, _ dstTextureHandle: UInt64) {
     guard let cmdBufWrapper: MetalCommandBufferWrapper = registry.get(cmdBufHandle) else {
         print("[MetalBlit] ERROR: Invalid command buffer handle \(cmdBufHandle)")
         return
@@ -59,7 +59,7 @@ func metal_blit_texture(_ cmdBufHandle: UInt64, _ srcTextureHandle: UInt64, _ ds
 ///   - cmdBufHandle: Handle to the MetalCommandBufferWrapper.
 ///   - textureHandle: Handle to the MetalTextureWrapper whose mipmaps should be generated.
 @_cdecl("metal_generate_mipmaps")
-func metal_generate_mipmaps(_ cmdBufHandle: UInt64, _ textureHandle: UInt64) {
+public func metal_generate_mipmaps(_ cmdBufHandle: UInt64, _ textureHandle: UInt64) {
     guard let cmdBufWrapper: MetalCommandBufferWrapper = registry.get(cmdBufHandle) else {
         print("[MetalBlit] ERROR: Invalid command buffer handle \(cmdBufHandle)")
         return
@@ -90,7 +90,7 @@ func metal_generate_mipmaps(_ cmdBufHandle: UInt64, _ textureHandle: UInt64) {
 ///   - bytesPerRow: Number of bytes per row in the destination buffer.
 ///   - bytesPerImage: Number of bytes per image slice in the destination buffer.
 @_cdecl("metal_copy_texture_to_buffer")
-func metal_copy_texture_to_buffer(_ cmdBufHandle: UInt64, _ textureHandle: UInt64, _ bufferHandle: UInt64, _ bytesPerRow: Int, _ bytesPerImage: Int) {
+public func metal_copy_texture_to_buffer(_ cmdBufHandle: UInt64, _ textureHandle: UInt64, _ bufferHandle: UInt64, _ bytesPerRow: Int, _ bytesPerImage: Int) {
     guard let cmdBufWrapper: MetalCommandBufferWrapper = registry.get(cmdBufHandle) else {
         print("[MetalBlit] ERROR: Invalid command buffer handle \(cmdBufHandle)")
         return
@@ -138,7 +138,7 @@ func metal_copy_texture_to_buffer(_ cmdBufHandle: UInt64, _ textureHandle: UInt6
 ///   - cmdBufHandle: Handle to the MetalCommandBufferWrapper.
 ///   - textureHandle: Handle to the MetalTextureWrapper to synchronize.
 @_cdecl("metal_synchronize_texture")
-func metal_synchronize_texture(_ cmdBufHandle: UInt64, _ textureHandle: UInt64) {
+public func metal_synchronize_texture(_ cmdBufHandle: UInt64, _ textureHandle: UInt64) {
     guard let cmdBufWrapper: MetalCommandBufferWrapper = registry.get(cmdBufHandle) else {
         print("[MetalBlit] ERROR: Invalid command buffer handle \(cmdBufHandle)")
         return
