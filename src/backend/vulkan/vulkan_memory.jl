@@ -199,6 +199,7 @@ function transition_image_layout!(cmd::CommandBuffer, image::Image,
     end
 
     barrier = ImageMemoryBarrier(
+        C_NULL,
         src_access, dst_access,
         old_layout, new_layout,
         QUEUE_FAMILY_IGNORED, QUEUE_FAMILY_IGNORED,
@@ -206,9 +207,9 @@ function transition_image_layout!(cmd::CommandBuffer, image::Image,
         ImageSubresourceRange(aspect_mask, UInt32(0), UInt32(mip_levels), UInt32(0), UInt32(array_layers))
     )
 
-    cmd_pipeline_barrier(cmd, src_stage, dst_stage,
-                         DependencyFlag(0),
-                         [], [], [barrier])
+    cmd_pipeline_barrier(cmd, [], [], [barrier];
+                         src_stage_mask=src_stage, dst_stage_mask=dst_stage,
+                         dependency_flags=DependencyFlag(0))
     return nothing
 end
 

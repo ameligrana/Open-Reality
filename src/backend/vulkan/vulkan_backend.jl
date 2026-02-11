@@ -2,6 +2,42 @@
 
 const VK_MAX_FRAMES_IN_FLIGHT = 2
 
+const VK_PRESENT_FRAG = """
+#version 450
+
+layout(set = 0, binding = 0) uniform PresentUBO {
+    float bloom_threshold;
+    float bloom_intensity;
+    float gamma;
+    int tone_mapping_mode;
+    int horizontal;
+    float _pad1, _pad2, _pad3;
+} params;
+
+layout(set = 0, binding = 1) uniform sampler2D sceneTexture;
+
+layout(location = 0) in vec2 fragUV;
+layout(location = 0) out vec4 outColor;
+
+vec3 aces(vec3 x) {
+    float a = 2.51;
+    float b = 0.03;
+    float c = 2.43;
+    float d = 0.59;
+    float e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+void main() {
+    vec3 hdr = texture(sceneTexture, fragUV).rgb;
+    // Tone mapping (ACES)
+    vec3 mapped = aces(hdr);
+    // Gamma correction
+    mapped = pow(mapped, vec3(1.0 / params.gamma));
+    outColor = vec4(mapped, 1.0);
+}
+"""
+
 """
     VulkanBackend <: AbstractBackend
 
@@ -31,7 +67,7 @@ mutable struct VulkanBackend <: AbstractBackend
     swapchain_views::Vector{ImageView}
     swapchain_format::Format
     swapchain_extent::Extent2D
-    swapchain_framebuffers::Vector{Framebuffer}
+    swapchain_framebuffers::Vector{VkFramebuffer}
     present_render_pass::Union{RenderPass, Nothing}
     depth_image::Union{Image, Nothing}
     depth_memory::Union{DeviceMemory, Nothing}
@@ -76,6 +112,12 @@ mutable struct VulkanBackend <: AbstractBackend
     default_texture::Union{VulkanGPUTexture, Nothing}
     shadow_sampler::Union{Sampler, Nothing}
 
+    # Per-frame transient descriptor pools (reset each frame for per-material allocations)
+    transient_pools::Vector{DescriptorPool}
+
+    # Per-frame temporary buffers (freed after fence wait at start of next frame)
+    frame_temp_buffers::Vector{Vector{Tuple{Buffer, DeviceMemory}}}
+
     # Fullscreen quad
     quad_buffer::Union{Buffer, Nothing}
     quad_memory::Union{DeviceMemory, Nothing}
@@ -84,6 +126,8 @@ mutable struct VulkanBackend <: AbstractBackend
     framebuffer_resized::Bool
     use_deferred::Bool
     post_process_config::Union{PostProcessConfig, Nothing}
+    present_pipeline::Union{VulkanShaderProgram, Nothing}
+    debug_frame_count::Int
 end
 
 function VulkanBackend()
@@ -93,7 +137,7 @@ function VulkanBackend()
         nothing, nothing, nothing, nothing, nothing, UInt32(0), UInt32(0),
         # Presentation
         nothing, nothing, Image[], ImageView[], FORMAT_B8G8R8A8_SRGB,
-        Extent2D(1280, 720), Framebuffer[], nothing, nothing, nothing, nothing,
+        Extent2D(1280, 720), VkFramebuffer[], nothing, nothing, nothing, nothing,
         # Commands + sync
         nothing, CommandBuffer[], Semaphore[], Semaphore[], Fence[], 1,
         # Descriptors
@@ -105,10 +149,18 @@ function VulkanBackend()
         # Pipelines
         nothing, nothing, VulkanGPUResourceCache(), VulkanTextureCache(),
         Dict{EntityID, BoundingSphere}(), nothing, nothing, nothing, nothing,
+        # Transient pools
+        DescriptorPool[],
+        # Temp buffers per frame
+        [Tuple{Buffer, DeviceMemory}[] for _ in 1:VK_MAX_FRAMES_IN_FLIGHT],
         # Quad
         nothing, nothing,
         # State
-        false, true, nothing
+        false, true, nothing,
+        # Present
+        nothing,
+        # Debug
+        0
     )
 end
 
@@ -129,8 +181,8 @@ function initialize!(backend::VulkanBackend; width::Int=1280, height::Int=720, t
     backend.window.width = width
     backend.window.height = height
 
-    # Create Vulkan instance
-    backend.instance = vk_create_instance(; enable_validation=false)
+    # Create Vulkan instance (validation layers for debugging)
+    backend.instance = vk_create_instance(; enable_validation=true)
 
     # Create surface
     backend.surface = vk_create_surface(backend.instance, backend.window.handle)
@@ -166,8 +218,14 @@ function initialize!(backend::VulkanBackend; width::Int=1280, height::Int=720, t
             unwrap(create_fence(backend.device, FenceCreateInfo(; flags=FENCE_CREATE_SIGNALED_BIT))))
     end
 
-    # Create descriptor pool
+    # Create descriptor pool (persistent allocations)
     backend.descriptor_pool = vk_create_descriptor_pool(backend.device; max_sets=512)
+
+    # Create per-frame transient descriptor pools (reset each frame)
+    for _ in 1:VK_MAX_FRAMES_IN_FLIGHT
+        push!(backend.transient_pools,
+            vk_create_descriptor_pool(backend.device; max_sets=256))
+    end
 
     # Create descriptor set layouts
     backend.per_frame_layout = vk_create_per_frame_layout(backend.device)
@@ -222,6 +280,14 @@ function initialize!(backend::VulkanBackend; width::Int=1280, height::Int=720, t
         backend.device, backend.physical_device, backend.command_pool, backend.graphics_queue,
         white_pixel, 1, 1, 4; format=FORMAT_R8G8B8A8_UNORM, generate_mipmaps=false)
 
+    # Fill lighting descriptor set unused bindings with default texture
+    for i in 1:VK_MAX_FRAMES_IN_FLIGHT
+        for binding in 2:8  # CSM cascades (2-5) + IBL (6-8)
+            vk_update_texture_descriptor!(backend.device, backend.lighting_ds[i],
+                binding, backend.default_texture)
+        end
+    end
+
     # Create shadow sampler
     backend.shadow_sampler = vk_create_shadow_sampler(backend.device)
 
@@ -238,6 +304,18 @@ function initialize!(backend::VulkanBackend; width::Int=1280, height::Int=720, t
     backend.post_process = vk_create_post_process(
         backend.device, backend.physical_device, width, height,
         backend.post_process_config, backend.fullscreen_layout, backend.descriptor_pool)
+
+    # Create present pipeline (tone maps and blits deferred result to swapchain)
+    backend.present_pipeline = vk_compile_and_create_pipeline(
+        backend.device, VK_FULLSCREEN_QUAD_VERT, VK_PRESENT_FRAG,
+        VulkanPipelineConfig(
+            backend.present_render_pass, UInt32(0),
+            vk_fullscreen_vertex_bindings(), vk_fullscreen_vertex_attributes(),
+            [backend.fullscreen_layout], PushConstantRange[],
+            false, false, false,
+            CULL_MODE_NONE, FRONT_FACE_COUNTER_CLOCKWISE,
+            1, width, height
+        ))
 
     # Setup input callbacks
     setup_input_callbacks!(backend.window, backend.input)
@@ -259,6 +337,14 @@ function shutdown!(backend::VulkanBackend)
 
     unwrap(device_wait_idle(backend.device))
 
+    # Destroy present pipeline
+    if backend.present_pipeline !== nothing
+        finalize(backend.present_pipeline.pipeline)
+        finalize(backend.present_pipeline.pipeline_layout)
+        backend.present_pipeline.vert_module !== nothing && finalize(backend.present_pipeline.vert_module)
+        backend.present_pipeline.frag_module !== nothing && finalize(backend.present_pipeline.frag_module)
+    end
+
     # Destroy post-processing
     if backend.post_process !== nothing
         vk_destroy_post_process!(backend.device, backend.post_process)
@@ -276,8 +362,8 @@ function shutdown!(backend::VulkanBackend)
 
     # Destroy forward pipeline
     if backend.forward_pipeline !== nothing
-        destroy_pipeline(backend.device, backend.forward_pipeline.pipeline)
-        destroy_pipeline_layout(backend.device, backend.forward_pipeline.pipeline_layout)
+        finalize(backend.forward_pipeline.pipeline)
+        finalize(backend.forward_pipeline.pipeline_layout)
     end
 
     # Destroy default texture + shadow sampler
@@ -285,7 +371,7 @@ function shutdown!(backend::VulkanBackend)
         vk_destroy_texture!(backend.device, backend.default_texture)
     end
     if backend.shadow_sampler !== nothing
-        destroy_sampler(backend.device, backend.shadow_sampler)
+        finalize(backend.shadow_sampler)
     end
 
     # Destroy caches
@@ -294,48 +380,60 @@ function shutdown!(backend::VulkanBackend)
 
     # Destroy per-frame UBOs
     for i in 1:VK_MAX_FRAMES_IN_FLIGHT
-        destroy_buffer(backend.device, backend.per_frame_ubos[i])
-        free_memory(backend.device, backend.per_frame_ubo_mems[i])
-        destroy_buffer(backend.device, backend.light_ubos[i])
-        free_memory(backend.device, backend.light_ubo_mems[i])
-        destroy_buffer(backend.device, backend.shadow_ubos[i])
-        free_memory(backend.device, backend.shadow_ubo_mems[i])
+        finalize(backend.per_frame_ubos[i])
+        finalize(backend.per_frame_ubo_mems[i])
+        finalize(backend.light_ubos[i])
+        finalize(backend.light_ubo_mems[i])
+        finalize(backend.shadow_ubos[i])
+        finalize(backend.shadow_ubo_mems[i])
+    end
+
+    # Destroy temp buffers
+    for frame_bufs in backend.frame_temp_buffers
+        for (buf, mem) in frame_bufs
+            finalize(buf)
+            finalize(mem)
+        end
+        empty!(frame_bufs)
     end
 
     # Destroy quad
     if backend.quad_buffer !== nothing
-        destroy_buffer(backend.device, backend.quad_buffer)
-        free_memory(backend.device, backend.quad_memory)
+        finalize(backend.quad_buffer)
+        finalize(backend.quad_memory)
     end
 
     # Destroy descriptor set layouts
     for layout in [backend.per_frame_layout, backend.per_material_layout,
                    backend.lighting_layout, backend.fullscreen_layout]
-        layout !== nothing && destroy_descriptor_set_layout(backend.device, layout)
+        layout !== nothing && finalize(layout)
     end
 
-    # Destroy descriptor pool
-    backend.descriptor_pool !== nothing && destroy_descriptor_pool(backend.device, backend.descriptor_pool)
+    # Destroy descriptor pools
+    for pool in backend.transient_pools
+        finalize(pool)
+    end
+    backend.descriptor_pool !== nothing && finalize(backend.descriptor_pool)
 
     # Destroy sync objects
     for i in 1:VK_MAX_FRAMES_IN_FLIGHT
-        destroy_semaphore(backend.device, backend.image_available_semaphores[i])
-        destroy_semaphore(backend.device, backend.render_finished_semaphores[i])
-        destroy_fence(backend.device, backend.in_flight_fences[i])
+        finalize(backend.image_available_semaphores[i])
+        finalize(backend.render_finished_semaphores[i])
+        finalize(backend.in_flight_fences[i])
     end
 
     # Destroy command pool
-    backend.command_pool !== nothing && destroy_command_pool(backend.device, backend.command_pool)
+    backend.command_pool !== nothing && finalize(backend.command_pool)
 
     # Destroy pipeline cache
     vk_destroy_all_cached_pipelines!(backend.device)
 
     # Destroy swapchain resources
     vk_destroy_swapchain_resources!(backend)
-    backend.swapchain !== nothing && destroy_swapchain_khr(backend.device, backend.swapchain)
+    backend.swapchain !== nothing && finalize(backend.swapchain)
 
     # Destroy surface, device, instance
-    backend.surface !== nothing && destroy_surface_khr(backend.instance, backend.surface)
+    backend.surface !== nothing && finalize(backend.surface)
     # Device and instance are finalized by Vulkan.jl GC
 
     # Destroy window
@@ -359,20 +457,31 @@ function render_frame!(backend::VulkanBackend, scene::Scene)
     frame_idx = backend.current_frame
     unwrap(wait_for_fences(backend.device, [backend.in_flight_fences[frame_idx]], true, typemax(UInt64)))
 
+    # Free temporary buffers from this frame's previous use (GPU is done with them now)
+    for (buf, mem) in backend.frame_temp_buffers[frame_idx]
+        finalize(buf)
+        finalize(mem)
+    end
+    empty!(backend.frame_temp_buffers[frame_idx])
+
     # Acquire next swapchain image
     result = acquire_next_image_khr(backend.device, backend.swapchain, typemax(UInt64);
                                      semaphore=backend.image_available_semaphores[frame_idx])
     if iserror(result)
         err = unwrap_error(result)
-        if err.code == VK_ERROR_OUT_OF_DATE_KHR
+        if err.code == ERROR_OUT_OF_DATE_KHR
             vk_recreate_swapchain!(backend)
             return
         end
         error("Failed to acquire swapchain image: $err")
     end
-    image_index = unwrap(result) + 1  # 0-indexed → 1-indexed
+    image_index_raw, _ = unwrap(result)
+    image_index = Int(image_index_raw) + 1  # 0-indexed → 1-indexed
 
     unwrap(reset_fences(backend.device, [backend.in_flight_fences[frame_idx]]))
+
+    # Reset the transient descriptor pool for this frame
+    unwrap(reset_descriptor_pool(backend.device, backend.transient_pools[frame_idx]))
 
     # Prepare frame data (backend-agnostic)
     frame_data = prepare_frame(scene, backend.bounds_cache)
@@ -423,7 +532,7 @@ function render_frame!(backend::VulkanBackend, scene::Scene)
     end
 
     # --- Present pass (blit to swapchain) ---
-    _render_present_pass!(cmd, backend, image_index, w, h)
+    _render_present_pass!(cmd, backend, image_index, frame_idx, w, h)
 
     # End command buffer
     unwrap(end_command_buffer(cmd))
@@ -448,7 +557,7 @@ function render_frame!(backend::VulkanBackend, scene::Scene)
 
     if iserror(present_result)
         err = unwrap_error(present_result)
-        if err.code == VK_ERROR_OUT_OF_DATE_KHR || err.code == VK_SUBOPTIMAL_KHR || backend.framebuffer_resized
+        if err.code == ERROR_OUT_OF_DATE_KHR || err.code == SUBOPTIMAL_KHR || backend.framebuffer_resized
             vk_recreate_swapchain!(backend)
         end
     elseif backend.framebuffer_resized
@@ -474,8 +583,8 @@ function _submit_empty_frame!(backend::VulkanBackend, frame_idx::Int, image_inde
     h = Int(backend.swapchain_extent.height)
 
     clear_values = [
-        VkClearValue(VkClearColorValue((0.1f0, 0.1f0, 0.1f0, 1.0f0))),
-        VkClearValue(VkClearDepthStencilValue(1.0f0, UInt32(0)))
+        ClearValue(ClearColorValue((0.1f0, 0.1f0, 0.1f0, 1.0f0))),
+        ClearValue(ClearDepthStencilValue(1.0f0, UInt32(0)))
     ]
     rp_begin = RenderPassBeginInfo(
         backend.present_render_pass,
@@ -512,11 +621,11 @@ function _render_gbuffer_pass!(cmd::CommandBuffer, backend::VulkanBackend,
     gb = dp.gbuffer
 
     clear_values = [
-        VkClearValue(VkClearColorValue((0.0f0, 0.0f0, 0.0f0, 0.0f0))),  # albedo+metallic
-        VkClearValue(VkClearColorValue((0.5f0, 0.5f0, 1.0f0, 0.0f0))),  # normal+roughness (default up normal)
-        VkClearValue(VkClearColorValue((0.0f0, 0.0f0, 0.0f0, 1.0f0))),  # emissive+AO
-        VkClearValue(VkClearColorValue((0.0f0, 0.0f0, 0.0f0, 1.0f0))),  # advanced material
-        VkClearValue(VkClearDepthStencilValue(1.0f0, UInt32(0))),        # depth
+        ClearValue(ClearColorValue((0.0f0, 0.0f0, 0.0f0, 0.0f0))),  # albedo+metallic
+        ClearValue(ClearColorValue((0.5f0, 0.5f0, 1.0f0, 0.0f0))),  # normal+roughness (default up normal)
+        ClearValue(ClearColorValue((0.0f0, 0.0f0, 0.0f0, 1.0f0))),  # emissive+AO
+        ClearValue(ClearColorValue((0.0f0, 0.0f0, 0.0f0, 1.0f0))),  # advanced material
+        ClearValue(ClearDepthStencilValue(1.0f0, UInt32(0))),        # depth
     ]
 
     rp_begin = RenderPassBeginInfo(
@@ -526,9 +635,9 @@ function _render_gbuffer_pass!(cmd::CommandBuffer, backend::VulkanBackend,
     )
     cmd_begin_render_pass(cmd, rp_begin, SUBPASS_CONTENTS_INLINE)
 
-    cmd_set_viewport(cmd, UInt32(0),
+    cmd_set_viewport(cmd,
         [Viewport(0.0f0, 0.0f0, Float32(width), Float32(height), 0.0f0, 1.0f0)])
-    cmd_set_scissor(cmd, UInt32(0),
+    cmd_set_scissor(cmd,
         [Rect2D(Offset2D(0, 0), Extent2D(UInt32(width), UInt32(height)))])
 
     # Render each opaque entity
@@ -552,8 +661,9 @@ function _render_gbuffer_pass!(cmd::CommandBuffer, backend::VulkanBackend,
         cmd_bind_descriptor_sets(cmd, PIPELINE_BIND_POINT_GRAPHICS, shader.pipeline_layout,
             UInt32(0), [backend.per_frame_ds[frame_idx]], UInt32[])
 
-        # Allocate and update per-material descriptor set (set 1)
-        mat_ds = vk_allocate_descriptor_set(backend.device, backend.descriptor_pool, backend.per_material_layout)
+        # Allocate and update per-material descriptor set (set 1) from transient pool
+        mat_ds = vk_allocate_descriptor_set(backend.device,
+            backend.transient_pools[frame_idx], backend.per_material_layout)
         mat_uniforms = vk_pack_material(material)
         mat_ubo, mat_mem = vk_create_uniform_buffer(backend.device, backend.physical_device, mat_uniforms)
         vk_update_ubo_descriptor!(backend.device, mat_ds, 0, mat_ubo, sizeof(mat_uniforms))
@@ -565,9 +675,11 @@ function _render_gbuffer_pass!(cmd::CommandBuffer, backend::VulkanBackend,
 
         # Push constants (per-object)
         push_data = vk_pack_per_object(entity_data.model, entity_data.normal_matrix)
-        cmd_push_constants(cmd, shader.pipeline_layout,
+        push_ref = Ref(push_data)
+        GC.@preserve push_ref cmd_push_constants(cmd, shader.pipeline_layout,
             SHADER_STAGE_VERTEX_BIT | SHADER_STAGE_FRAGMENT_BIT,
-            UInt32(0), UInt32(sizeof(push_data)), Ref(push_data))
+            UInt32(0), UInt32(sizeof(push_data)),
+            Base.unsafe_convert(Ptr{Cvoid}, Base.cconvert(Ptr{Cvoid}, push_ref)))
 
         # Draw mesh
         gpu_mesh = vk_get_or_upload_mesh!(backend.gpu_cache, backend.device,
@@ -575,10 +687,8 @@ function _render_gbuffer_pass!(cmd::CommandBuffer, backend::VulkanBackend,
             eid, mesh)
         vk_bind_and_draw_mesh!(cmd, gpu_mesh)
 
-        # Cleanup per-draw UBO (freed lazily by descriptor pool reset or device idle)
-        # In production, we'd use a ring buffer; here we leak until frame end
-        destroy_buffer(backend.device, mat_ubo)
-        free_memory(backend.device, mat_mem)
+        # Defer UBO cleanup until after GPU finishes (freed at start of next frame after fence wait)
+        push!(backend.frame_temp_buffers[frame_idx], (mat_ubo, mat_mem))
     end
 
     cmd_end_render_pass(cmd)
@@ -590,7 +700,7 @@ function _render_lighting_pass!(cmd::CommandBuffer, backend::VulkanBackend,
     dp = backend.deferred_pipeline
     lt = dp.lighting_target
 
-    clear_values = [VkClearValue(VkClearColorValue((0.0f0, 0.0f0, 0.0f0, 1.0f0)))]
+    clear_values = [ClearValue(ClearColorValue((0.0f0, 0.0f0, 0.0f0, 1.0f0)))]
 
     rp_begin = RenderPassBeginInfo(
         lt.render_pass, lt.framebuffer,
@@ -599,16 +709,17 @@ function _render_lighting_pass!(cmd::CommandBuffer, backend::VulkanBackend,
     )
     cmd_begin_render_pass(cmd, rp_begin, SUBPASS_CONTENTS_INLINE)
 
-    cmd_set_viewport(cmd, UInt32(0),
+    cmd_set_viewport(cmd,
         [Viewport(0.0f0, 0.0f0, Float32(width), Float32(height), 0.0f0, 1.0f0)])
-    cmd_set_scissor(cmd, UInt32(0),
+    cmd_set_scissor(cmd,
         [Rect2D(Offset2D(0, 0), Extent2D(UInt32(width), UInt32(height)))])
 
     if dp.lighting_pipeline !== nothing
         cmd_bind_pipeline(cmd, PIPELINE_BIND_POINT_GRAPHICS, dp.lighting_pipeline.pipeline)
 
         # Bind G-buffer textures + per-frame UBO to fullscreen pass descriptor set
-        lighting_ds = vk_allocate_descriptor_set(backend.device, backend.descriptor_pool, backend.fullscreen_layout)
+        lighting_ds = vk_allocate_descriptor_set(backend.device,
+            backend.transient_pools[frame_idx], backend.fullscreen_layout)
 
         # Binding 0: Per-frame UBO
         vk_update_ubo_descriptor!(backend.device, lighting_ds, 0,
@@ -622,28 +733,14 @@ function _render_lighting_pass!(cmd::CommandBuffer, backend::VulkanBackend,
         vk_update_texture_descriptor!(backend.device, lighting_ds, 4, gb.advanced_material)
         vk_update_texture_descriptor!(backend.device, lighting_ds, 5, gb.depth)
 
-        # Binding 6: SSAO (default white if no SSAO)
-        if dp.ssao_pass !== nothing
-            vk_update_image_sampler_descriptor!(backend.device, lighting_ds, 6,
-                dp.ssao_pass.blur_target.color_view,
-                dp.ssao_pass.blur_target.color_image === nothing ?
-                    backend.default_texture.sampler : dp.ssao_pass.blur_target.color_view !== nothing ?
-                    backend.default_texture.sampler : backend.default_texture.sampler)
-        else
-            vk_update_texture_descriptor!(backend.device, lighting_ds, 6, backend.default_texture)
-        end
-
-        # Binding 7: SSR (default black if no SSR)
-        if dp.ssr_pass !== nothing
-            vk_update_image_sampler_descriptor!(backend.device, lighting_ds, 7,
-                dp.ssr_pass.ssr_target.color_view,
-                backend.default_texture.sampler)
-        else
-            vk_update_texture_descriptor!(backend.device, lighting_ds, 7, backend.default_texture)
+        # Bindings 6-8: SSAO / SSR / unused
+        # TODO: bind actual SSAO/SSR textures once those passes are executed in the render loop
+        for bind_idx in 6:8
+            vk_update_texture_descriptor!(backend.device, lighting_ds, bind_idx, backend.default_texture)
         end
 
         cmd_bind_descriptor_sets(cmd, PIPELINE_BIND_POINT_GRAPHICS, dp.lighting_pipeline.pipeline_layout,
-            UInt32(0), [lighting_ds], UInt32[])
+            UInt32(0), [lighting_ds, backend.lighting_ds[frame_idx]], UInt32[])
 
         vk_draw_fullscreen_quad!(cmd, backend.quad_buffer)
     end
@@ -652,10 +749,11 @@ function _render_lighting_pass!(cmd::CommandBuffer, backend::VulkanBackend,
 end
 
 function _render_present_pass!(cmd::CommandBuffer, backend::VulkanBackend,
-                                image_index::Int, width::Int, height::Int)
+                                image_index::Int, frame_idx::Int,
+                                width::Int, height::Int)
     clear_values = [
-        VkClearValue(VkClearColorValue((0.0f0, 0.0f0, 0.0f0, 1.0f0))),
-        VkClearValue(VkClearDepthStencilValue(1.0f0, UInt32(0)))
+        ClearValue(ClearColorValue((0.0f0, 0.0f0, 0.0f0, 1.0f0))),
+        ClearValue(ClearDepthStencilValue(1.0f0, UInt32(0)))
     ]
 
     rp_begin = RenderPassBeginInfo(
@@ -666,14 +764,41 @@ function _render_present_pass!(cmd::CommandBuffer, backend::VulkanBackend,
     )
     cmd_begin_render_pass(cmd, rp_begin, SUBPASS_CONTENTS_INLINE)
 
-    cmd_set_viewport(cmd, UInt32(0),
+    cmd_set_viewport(cmd,
         [Viewport(0.0f0, 0.0f0, Float32(width), Float32(height), 0.0f0, 1.0f0)])
-    cmd_set_scissor(cmd, UInt32(0),
+    cmd_set_scissor(cmd,
         [Rect2D(Offset2D(0, 0), Extent2D(UInt32(width), UInt32(height)))])
 
-    # TODO: In a complete implementation, we'd run the post-processing chain here
-    # and blit the final output. For now, we directly present the lighting result
-    # via a simple fullscreen pass. This placeholder ensures the present pass works.
+    # Draw deferred lighting result to swapchain with tone mapping
+    if backend.present_pipeline !== nothing && backend.deferred_pipeline !== nothing &&
+       backend.deferred_pipeline.lighting_target !== nothing
+        dp = backend.deferred_pipeline
+
+        cmd_bind_pipeline(cmd, PIPELINE_BIND_POINT_GRAPHICS, backend.present_pipeline.pipeline)
+
+        # Allocate descriptor set from transient pool
+        present_ds = vk_allocate_descriptor_set(backend.device,
+            backend.transient_pools[frame_idx], backend.fullscreen_layout)
+
+        # Binding 0: UBO (reuse per-frame UBO, contents unused by present shader)
+        vk_update_ubo_descriptor!(backend.device, present_ds, 0,
+            backend.per_frame_ubos[frame_idx], sizeof(VulkanPerFrameUniforms))
+
+        # Binding 1: deferred lighting result texture
+        vk_update_image_sampler_descriptor!(backend.device, present_ds, 1,
+            dp.lighting_target.color_view, backend.default_texture.sampler)
+
+        # Fill unused bindings 2-8 with default texture to avoid validation errors
+        for bind_idx in 2:8
+            vk_update_texture_descriptor!(backend.device, present_ds, bind_idx, backend.default_texture)
+        end
+
+        cmd_bind_descriptor_sets(cmd, PIPELINE_BIND_POINT_GRAPHICS,
+            backend.present_pipeline.pipeline_layout,
+            UInt32(0), [present_ds], UInt32[])
+
+        vk_draw_fullscreen_quad!(cmd, backend.quad_buffer)
+    end
 
     cmd_end_render_pass(cmd)
 end
@@ -698,10 +823,10 @@ function backend_create_shader(backend::VulkanBackend, vertex_src::String, fragm
 end
 
 function backend_destroy_shader!(backend::VulkanBackend, shader::VulkanShaderProgram)
-    destroy_pipeline(backend.device, shader.pipeline)
-    destroy_pipeline_layout(backend.device, shader.pipeline_layout)
-    shader.vert_module !== nothing && destroy_shader_module(backend.device, shader.vert_module)
-    shader.frag_module !== nothing && destroy_shader_module(backend.device, shader.frag_module)
+    finalize(shader.pipeline)
+    finalize(shader.pipeline_layout)
+    shader.vert_module !== nothing && finalize(shader.vert_module)
+    shader.frag_module !== nothing && finalize(shader.frag_module)
     return nothing
 end
 
@@ -906,7 +1031,7 @@ function backend_poll_events!(backend::VulkanBackend)
 end
 
 function backend_get_time(backend::VulkanBackend)
-    return GLFW.GetTime()
+    return get_time()
 end
 
 function backend_capture_cursor!(backend::VulkanBackend)

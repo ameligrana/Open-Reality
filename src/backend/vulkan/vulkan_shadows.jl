@@ -8,7 +8,7 @@ Create cascaded shadow map render targets and depth pipeline.
 function vk_create_csm(device::Device, physical_device::PhysicalDevice,
                         num_cascades::Int, resolution::Int,
                         near::Float32, far::Float32)
-    framebuffers = Framebuffer[]
+    framebuffers = VkFramebuffer[]
     render_passes = RenderPass[]
     depth_textures = VulkanGPUTexture[]
 
@@ -115,7 +115,7 @@ function vk_render_csm_passes!(cmd::CommandBuffer, backend, csm::VulkanCascadedS
         light_view_proj = csm.cascade_matrices[i]
         # We use the cascade matrix as the combined view-projection
 
-        clear_values = [VkClearValue(VkClearDepthStencilValue(1.0f0, UInt32(0)))]
+        clear_values = [ClearValue(ClearDepthStencilValue(1.0f0, UInt32(0)))]
 
         rp_begin = RenderPassBeginInfo(
             csm.cascade_render_passes[i],
@@ -125,9 +125,9 @@ function vk_render_csm_passes!(cmd::CommandBuffer, backend, csm::VulkanCascadedS
         )
         cmd_begin_render_pass(cmd, rp_begin, SUBPASS_CONTENTS_INLINE)
 
-        cmd_set_viewport(cmd, UInt32(0), [Viewport(0.0f0, 0.0f0,
+        cmd_set_viewport(cmd, [Viewport(0.0f0, 0.0f0,
             Float32(csm.resolution), Float32(csm.resolution), 0.0f0, 1.0f0)])
-        cmd_set_scissor(cmd, UInt32(0), [Rect2D(Offset2D(0, 0),
+        cmd_set_scissor(cmd, [Rect2D(Offset2D(0, 0),
             Extent2D(UInt32(csm.resolution), UInt32(csm.resolution)))])
 
         if csm.depth_pipeline !== nothing
@@ -147,9 +147,11 @@ function vk_render_csm_passes!(cmd::CommandBuffer, backend, csm::VulkanCascadedS
                 normal_matrix = SMatrix{3, 3, Float32, 9}(transpose(inv(model3)))
 
                 push_data = vk_pack_per_object(model, normal_matrix)
-                cmd_push_constants(cmd, csm.depth_pipeline.pipeline_layout,
+                push_ref = Ref(push_data)
+                GC.@preserve push_ref cmd_push_constants(cmd, csm.depth_pipeline.pipeline_layout,
                     SHADER_STAGE_VERTEX_BIT | SHADER_STAGE_FRAGMENT_BIT,
-                    UInt32(0), UInt32(sizeof(push_data)), Ref(push_data))
+                    UInt32(0), UInt32(sizeof(push_data)),
+                    Base.unsafe_convert(Ptr{Cvoid}, Base.cconvert(Ptr{Cvoid}, push_ref)))
 
                 gpu_mesh = vk_get_or_upload_mesh!(backend.gpu_cache, backend.device,
                     backend.physical_device, backend.command_pool, backend.graphics_queue,
@@ -171,13 +173,13 @@ Destroy cascaded shadow map resources.
 """
 function vk_destroy_csm!(device::Device, csm::VulkanCascadedShadowMap)
     for i in 1:csm.num_cascades
-        destroy_framebuffer(device, csm.cascade_framebuffers[i])
-        destroy_render_pass(device, csm.cascade_render_passes[i])
+        finalize(csm.cascade_framebuffers[i])
+        finalize(csm.cascade_render_passes[i])
         vk_destroy_texture!(device, csm.cascade_depth_textures[i])
     end
     if csm.depth_pipeline !== nothing
-        destroy_pipeline(device, csm.depth_pipeline.pipeline)
-        destroy_pipeline_layout(device, csm.depth_pipeline.pipeline_layout)
+        finalize(csm.depth_pipeline.pipeline)
+        finalize(csm.depth_pipeline.pipeline_layout)
     end
     return nothing
 end

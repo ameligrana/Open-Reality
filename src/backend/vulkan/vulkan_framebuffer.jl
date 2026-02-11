@@ -54,15 +54,27 @@ function vk_create_render_target(device::Device, physical_device::PhysicalDevice
         SubpassDescription(PIPELINE_BIND_POINT_GRAPHICS, [], [color_ref], [])
     end
 
-    dependency = SubpassDependency(
+    # EXTERNAL → subpass 0: wait for prior color/depth output before we begin writing
+    dep_in = SubpassDependency(
         VK_SUBPASS_EXTERNAL, UInt32(0),
         PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
         PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
         AccessFlag(0),
-        ACCESS_COLOR_ATTACHMENT_WRITE_BIT | (has_depth ? ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : AccessFlag(0))
+        ACCESS_COLOR_ATTACHMENT_WRITE_BIT | (has_depth ? ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT : AccessFlag(0)),
+        DependencyFlag(0)
     )
 
-    rp = unwrap(create_render_pass(device, RenderPassCreateInfo(attachments, [subpass], [dependency])))
+    # subpass 0 → EXTERNAL: make color writes visible for subsequent fragment shader reads
+    dep_out = SubpassDependency(
+        UInt32(0), VK_SUBPASS_EXTERNAL,
+        PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        ACCESS_SHADER_READ_BIT,
+        DependencyFlag(0)
+    )
+
+    rp = unwrap(create_render_pass(device, RenderPassCreateInfo(attachments, [subpass], [dep_in, dep_out])))
 
     # Create framebuffer
     views = ImageView[color_tex.view]
@@ -141,15 +153,27 @@ function vk_create_gbuffer(device::Device, physical_device::PhysicalDevice,
         depth_stencil_attachment=depth_ref
     )
 
-    dependency = SubpassDependency(
+    # EXTERNAL → subpass 0: wait for prior operations
+    dep_in = SubpassDependency(
         VK_SUBPASS_EXTERNAL, UInt32(0),
         PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
         PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
         AccessFlag(0),
-        ACCESS_COLOR_ATTACHMENT_WRITE_BIT | ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+        ACCESS_COLOR_ATTACHMENT_WRITE_BIT | ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        DependencyFlag(0)
     )
 
-    rp = unwrap(create_render_pass(device, RenderPassCreateInfo(attachments, [subpass], [dependency])))
+    # subpass 0 → EXTERNAL: make color+depth writes visible for subsequent shader reads
+    dep_out = SubpassDependency(
+        UInt32(0), VK_SUBPASS_EXTERNAL,
+        PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+        PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        ACCESS_COLOR_ATTACHMENT_WRITE_BIT | ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        ACCESS_SHADER_READ_BIT,
+        DependencyFlag(0)
+    )
+
+    rp = unwrap(create_render_pass(device, RenderPassCreateInfo(attachments, [subpass], [dep_in, dep_out])))
 
     views = [albedo_metallic.view, normal_roughness.view, emissive_ao.view,
              advanced_material.view, depth.view]
@@ -167,19 +191,19 @@ end
 Destroy a VulkanFramebuffer and its resources.
 """
 function vk_destroy_render_target!(device::Device, target::VulkanFramebuffer)
-    destroy_framebuffer(device, target.framebuffer)
-    destroy_render_pass(device, target.render_pass)
-    destroy_image_view(device, target.color_view)
-    destroy_image(device, target.color_image)
-    free_memory(device, target.color_memory)
+    finalize(target.framebuffer)
+    finalize(target.render_pass)
+    finalize(target.color_view)
+    finalize(target.color_image)
+    finalize(target.color_memory)
     if target.depth_view !== nothing
-        destroy_image_view(device, target.depth_view)
+        finalize(target.depth_view)
     end
     if target.depth_image !== nothing
-        destroy_image(device, target.depth_image)
+        finalize(target.depth_image)
     end
     if target.depth_memory !== nothing
-        free_memory(device, target.depth_memory)
+        finalize(target.depth_memory)
     end
     return nothing
 end
@@ -190,8 +214,8 @@ end
 Destroy a VulkanGBuffer and its resources.
 """
 function vk_destroy_gbuffer!(device::Device, gbuffer::VulkanGBuffer)
-    destroy_framebuffer(device, gbuffer.framebuffer)
-    destroy_render_pass(device, gbuffer.render_pass)
+    finalize(gbuffer.framebuffer)
+    finalize(gbuffer.render_pass)
     vk_destroy_texture!(device, gbuffer.albedo_metallic)
     vk_destroy_texture!(device, gbuffer.normal_roughness)
     vk_destroy_texture!(device, gbuffer.emissive_ao)
@@ -223,15 +247,26 @@ function vk_create_depth_only_render_target(device::Device, physical_device::Phy
         depth_stencil_attachment=depth_ref
     )
 
-    dependency = SubpassDependency(
+    dep_in = SubpassDependency(
         VK_SUBPASS_EXTERNAL, UInt32(0),
         PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
         PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
         AccessFlag(0),
-        ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+        ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        DependencyFlag(0)
     )
 
-    rp = unwrap(create_render_pass(device, RenderPassCreateInfo([attachment], [subpass], [dependency])))
+    # subpass 0 → EXTERNAL: make depth writes visible for subsequent shader reads
+    dep_out = SubpassDependency(
+        UInt32(0), VK_SUBPASS_EXTERNAL,
+        PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+        PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        ACCESS_SHADER_READ_BIT,
+        DependencyFlag(0)
+    )
+
+    rp = unwrap(create_render_pass(device, RenderPassCreateInfo([attachment], [subpass], [dep_in, dep_out])))
     fb = unwrap(create_framebuffer(device, FramebufferCreateInfo(
         rp, [depth_tex.view], UInt32(width), UInt32(height), UInt32(1)
     )))

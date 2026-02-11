@@ -25,14 +25,15 @@ function vk_create_instance(; enable_validation::Bool=false)
     layers = String[]
     if enable_validation
         push!(layers, "VK_LAYER_KHRONOS_validation")
+        push!(extensions, "VK_EXT_debug_utils")
     end
 
     app_info = ApplicationInfo(
-        "OpenReality",
-        VersionNumber(0, 1, 0),
-        "OpenReality Engine",
-        VersionNumber(0, 1, 0),
-        VK_API_VERSION_1_2
+        v"0.1.0",
+        v"0.1.0",
+        v"1.2";
+        application_name="OpenReality",
+        engine_name="OpenReality Engine"
     )
 
     create_info = InstanceCreateInfo(
@@ -42,7 +43,74 @@ function vk_create_instance(; enable_validation::Bool=false)
     )
 
     instance = unwrap(create_instance(create_info))
+
+    if enable_validation
+        _vk_setup_debug_messenger(instance)
+    end
+
     return instance
+end
+
+# Persistent reference to prevent GC of the debug callback
+const _VK_DEBUG_CALLBACK_REF = Ref{Any}(nothing)
+
+function _vk_debug_messenger_callback(severity, type, callback_data_ptr, user_data)
+    callback_data = unsafe_load(callback_data_ptr)
+    msg = unsafe_string(callback_data.pMessage)
+
+    if (severity & Vulkan.VkCore.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0
+        @error "[Vulkan Validation] $msg"
+    elseif (severity & Vulkan.VkCore.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) != 0
+        @warn "[Vulkan Validation] $msg"
+    else
+        @info "[Vulkan Validation] $msg"
+    end
+    return UInt32(0)  # VK_FALSE
+end
+
+function _vk_setup_debug_messenger(instance::Instance)
+    severity_flags = Vulkan.VkCore.VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+                     Vulkan.VkCore.VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT
+    type_flags = Vulkan.VkCore.VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
+                 Vulkan.VkCore.VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+                 Vulkan.VkCore.VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT
+
+    callback_fn = @cfunction(_vk_debug_messenger_callback,
+        UInt32,
+        (UInt32, UInt32, Ptr{Vulkan.VkCore.VkDebugUtilsMessengerCallbackDataEXT}, Ptr{Cvoid}))
+
+    _VK_DEBUG_CALLBACK_REF[] = callback_fn  # prevent GC
+
+    create_info = Vulkan.VkCore.VkDebugUtilsMessengerCreateInfoEXT(
+        Vulkan.VkCore.VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
+        C_NULL, UInt32(0),
+        severity_flags, type_flags,
+        callback_fn, C_NULL
+    )
+
+    messenger_ref = Ref{Vulkan.VkCore.VkDebugUtilsMessengerEXT}()
+    create_info_ref = Ref(create_info)
+
+    # Load the function pointer
+    func_ptr = ccall((:vkGetInstanceProcAddr, Vulkan.VkCore.libvulkan),
+        Ptr{Cvoid}, (Ptr{Nothing}, Cstring),
+        instance.vks, "vkCreateDebugUtilsMessengerEXT")
+
+    if func_ptr != C_NULL
+        GC.@preserve create_info_ref messenger_ref begin
+            result = ccall(func_ptr, Int32,
+                (Ptr{Nothing}, Ptr{Vulkan.VkCore.VkDebugUtilsMessengerCreateInfoEXT},
+                 Ptr{Cvoid}, Ptr{Vulkan.VkCore.VkDebugUtilsMessengerEXT}),
+                instance.vks, create_info_ref, C_NULL, messenger_ref)
+            if result == 0
+                @info "Vulkan validation messenger installed"
+            else
+                @warn "Failed to create debug messenger: $result"
+            end
+        end
+    else
+        @warn "vkCreateDebugUtilsMessengerEXT not available"
+    end
 end
 
 """
@@ -57,7 +125,8 @@ function vk_create_surface(instance::Instance, window_handle::GLFW.Window)
                    (Ptr{Nothing}, GLFW.Window, Ptr{Cvoid}, Ptr{Ptr{Nothing}}),
                    instance.vks, window_handle, C_NULL, surface_ref)
     result == 0 || error("Failed to create Vulkan window surface: result code $result")
-    return SurfaceKHR(surface_ref[], instance)
+    destructor = x -> Vulkan._destroy_surface_khr(instance, x)
+    return SurfaceKHR(surface_ref[], destructor, instance)
 end
 
 """
@@ -82,7 +151,7 @@ function vk_find_queue_families(physical_device::PhysicalDevice, surface::Surfac
 
     for (i, prop) in enumerate(props)
         idx = UInt32(i - 1)  # 0-based
-        if (prop.queue_flags & QUEUE_GRAPHICS_BIT) != 0
+        if (prop.queue_flags & QUEUE_GRAPHICS_BIT) != QueueFlag(0)
             graphics_idx = idx
         end
         supported = unwrap(get_physical_device_surface_support_khr(physical_device, idx, surface))
@@ -152,11 +221,10 @@ function vk_create_logical_device(physical_device::PhysicalDevice, indices::Queu
         for family in unique_families
     ]
 
-    features = PhysicalDeviceFeatures(;
-        sampler_anisotropy=true,
-        fill_mode_non_solid=true,
-        independent_blend=true,
-        multi_draw_indirect=false
+    features = PhysicalDeviceFeatures(
+        :sampler_anisotropy,
+        :fill_mode_non_solid,
+        :independent_blend
     )
 
     device_info = DeviceCreateInfo(

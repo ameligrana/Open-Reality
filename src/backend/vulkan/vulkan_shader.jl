@@ -48,7 +48,7 @@ end
     vk_create_shader_module(device, spirv_code) -> ShaderModule
 """
 function vk_create_shader_module(device::Device, spirv_code::Vector{UInt32})
-    info = ShaderModuleCreateInfo(spirv_code)
+    info = ShaderModuleCreateInfo(length(spirv_code) * sizeof(UInt32), spirv_code)
     return unwrap(create_shader_module(device, info))
 end
 
@@ -159,14 +159,14 @@ function vk_create_graphics_pipeline(device::Device, vert_spirv::Vector{UInt32},
     )
 
     rasterizer = PipelineRasterizationStateCreateInfo(
-        false,  # depth_clamp
-        false,  # rasterizer_discard
+        false,  # depth_clamp_enable
+        false,  # rasterizer_discard_enable
         POLYGON_MODE_FILL,
-        config.cull_mode,
         config.front_face,
-        false,  # depth_bias
+        false,  # depth_bias_enable
         0.0f0, 0.0f0, 0.0f0,  # depth bias constant/clamp/slope
-        1.0f0  # line_width
+        1.0f0;  # line_width
+        cull_mode=config.cull_mode
     )
 
     multisample = PipelineMultisampleStateCreateInfo(
@@ -219,8 +219,9 @@ function vk_create_graphics_pipeline(device::Device, vert_spirv::Vector{UInt32},
         [vert_stage, frag_stage],
         rasterizer,
         pipeline_layout,
-        config.render_pass,
-        config.subpass;
+        config.subpass,
+        Int32(-1);  # base_pipeline_index
+        render_pass=config.render_pass,
         vertex_input_state=vertex_input,
         input_assembly_state=input_assembly,
         viewport_state=viewport_state,
@@ -230,8 +231,8 @@ function vk_create_graphics_pipeline(device::Device, vert_spirv::Vector{UInt32},
         dynamic_state=dynamic_state
     )
 
-    result = unwrap(create_graphics_pipelines(device, [pipeline_info]))
-    pipeline = result[1]
+    pipelines, _ = unwrap(create_graphics_pipelines(device, [pipeline_info]))
+    pipeline = pipelines[1]
 
     return VulkanShaderProgram(pipeline, pipeline_layout, config.descriptor_set_layouts;
                                vert=vert_module, frag=frag_module)
@@ -267,10 +268,10 @@ end
 
 function vk_destroy_all_cached_pipelines!(device::Device)
     for (_, prog) in _VK_PIPELINE_CACHE
-        destroy_pipeline(device, prog.pipeline)
-        destroy_pipeline_layout(device, prog.pipeline_layout)
-        prog.vert_module !== nothing && destroy_shader_module(device, prog.vert_module)
-        prog.frag_module !== nothing && destroy_shader_module(device, prog.frag_module)
+        finalize(prog.pipeline)
+        finalize(prog.pipeline_layout)
+        prog.vert_module !== nothing && finalize(prog.vert_module)
+        prog.frag_module !== nothing && finalize(prog.frag_module)
     end
     empty!(_VK_PIPELINE_CACHE)
     return nothing

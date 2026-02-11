@@ -101,7 +101,7 @@ end
 
 function vk_destroy_ssr_pass!(device::Device, ssr::VulkanSSRPass)
     vk_destroy_render_target!(device, ssr.ssr_target)
-    destroy_pipeline(device, ssr.ssr_pipeline.pipeline)
-    destroy_pipeline_layout(device, ssr.ssr_pipeline.pipeline_layout)
+    finalize(ssr.ssr_pipeline.pipeline)
+    finalize(ssr.ssr_pipeline.pipeline_layout)
     return nothing
 end

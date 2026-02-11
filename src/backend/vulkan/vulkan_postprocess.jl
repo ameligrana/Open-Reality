@@ -93,15 +93,15 @@ function vk_destroy_post_process!(device::Device, pp::VulkanPostProcessPipeline)
     for bt in pp.bloom_targets
         vk_destroy_render_target!(device, bt)
     end
-    destroy_pipeline(device, pp.composite_pipeline.pipeline)
-    destroy_pipeline_layout(device, pp.composite_pipeline.pipeline_layout)
-    destroy_pipeline(device, pp.bright_extract_pipeline.pipeline)
-    destroy_pipeline_layout(device, pp.bright_extract_pipeline.pipeline_layout)
-    destroy_pipeline(device, pp.blur_pipeline.pipeline)
-    destroy_pipeline_layout(device, pp.blur_pipeline.pipeline_layout)
+    finalize(pp.composite_pipeline.pipeline)
+    finalize(pp.composite_pipeline.pipeline_layout)
+    finalize(pp.bright_extract_pipeline.pipeline)
+    finalize(pp.bright_extract_pipeline.pipeline_layout)
+    finalize(pp.blur_pipeline.pipeline)
+    finalize(pp.blur_pipeline.pipeline_layout)
     if pp.fxaa_pipeline !== nothing
-        destroy_pipeline(device, pp.fxaa_pipeline.pipeline)
-        destroy_pipeline_layout(device, pp.fxaa_pipeline.pipeline_layout)
+        finalize(pp.fxaa_pipeline.pipeline)
+        finalize(pp.fxaa_pipeline.pipeline_layout)
     end
     return nothing
 end

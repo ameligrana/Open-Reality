@@ -95,9 +95,9 @@ function _upload_to_device_local(device::Device, physical_device::PhysicalDevice
     # Copy staging → device
     vk_copy_buffer!(device, command_pool, queue, staging_buf, dst_buf, size)
 
-    # Destroy staging
-    destroy_buffer(device, staging_buf)
-    free_memory(device, staging_mem)
+    # Destroy staging (use finalize to properly deregister GC finalizer)
+    finalize(staging_buf)
+    finalize(staging_mem)
 
     return dst_buf, dst_mem
 end
@@ -122,7 +122,7 @@ end
 Bind vertex/index buffers and issue an indexed draw call.
 """
 function vk_bind_and_draw_mesh!(cmd::CommandBuffer, gpu_mesh::VulkanGPUMesh)
-    cmd_bind_vertex_buffers(cmd, UInt32(0),
+    cmd_bind_vertex_buffers(cmd,
         [gpu_mesh.vertex_buffer, gpu_mesh.normal_buffer, gpu_mesh.uv_buffer],
         [UInt64(0), UInt64(0), UInt64(0)]
     )
@@ -137,14 +137,14 @@ end
 Destroy a GPU mesh and free its memory.
 """
 function vk_destroy_mesh!(device::Device, gpu_mesh::VulkanGPUMesh)
-    destroy_buffer(device, gpu_mesh.vertex_buffer)
-    free_memory(device, gpu_mesh.vertex_memory)
-    destroy_buffer(device, gpu_mesh.normal_buffer)
-    free_memory(device, gpu_mesh.normal_memory)
-    destroy_buffer(device, gpu_mesh.uv_buffer)
-    free_memory(device, gpu_mesh.uv_memory)
-    destroy_buffer(device, gpu_mesh.index_buffer)
-    free_memory(device, gpu_mesh.index_memory)
+    finalize(gpu_mesh.vertex_buffer)
+    finalize(gpu_mesh.vertex_memory)
+    finalize(gpu_mesh.normal_buffer)
+    finalize(gpu_mesh.normal_memory)
+    finalize(gpu_mesh.uv_buffer)
+    finalize(gpu_mesh.uv_memory)
+    finalize(gpu_mesh.index_buffer)
+    finalize(gpu_mesh.index_memory)
     return nothing
 end
 
@@ -197,7 +197,7 @@ end
 Bind and draw a fullscreen quad (6 vertices, 2 triangles).
 """
 function vk_draw_fullscreen_quad!(cmd::CommandBuffer, quad_buffer::Buffer)
-    cmd_bind_vertex_buffers(cmd, UInt32(0), [quad_buffer], [UInt64(0)])
+    cmd_bind_vertex_buffers(cmd, [quad_buffer], [UInt64(0)])
     cmd_draw(cmd, UInt32(6), UInt32(1), UInt32(0), UInt32(0))
     return nothing
 end

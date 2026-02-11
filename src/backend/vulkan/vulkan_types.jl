@@ -3,6 +3,12 @@
 
 using Vulkan
 
+# Vulkan constants not re-exported by Vulkan.jl high-level API
+const VK_SUBPASS_EXTERNAL = UInt32(0xFFFFFFFF)
+
+# Type alias to avoid collision with OpenGL Framebuffer
+const VkFramebuffer = Vulkan.Framebuffer
+
 # ==================================================================
 # Concrete GPU resource types
 # ==================================================================
@@ -65,7 +71,7 @@ end
 Vulkan render target — owns color image + depth image + framebuffer + render pass.
 """
 mutable struct VulkanFramebuffer <: AbstractFramebuffer
-    framebuffer::Framebuffer
+    framebuffer::VkFramebuffer
     render_pass::RenderPass
     color_image::Image
     color_memory::DeviceMemory
@@ -92,7 +98,7 @@ MRT 3 (RGBA8):   clearcoat, SSS, reserved
 Depth:           D32_SFLOAT
 """
 mutable struct VulkanGBuffer <: AbstractGBuffer
-    framebuffer::Framebuffer
+    framebuffer::VkFramebuffer
     render_pass::RenderPass
     albedo_metallic::VulkanGPUTexture
     normal_roughness::VulkanGPUTexture
@@ -112,7 +118,7 @@ get_height(gb::VulkanGBuffer) = gb.height
 Vulkan depth-only render target for shadow mapping.
 """
 mutable struct VulkanShadowMap <: AbstractShadowMap
-    framebuffer::Framebuffer
+    framebuffer::VkFramebuffer
     render_pass::RenderPass
     depth_texture::VulkanGPUTexture
     width::Int
@@ -129,7 +135,7 @@ Vulkan cascaded shadow maps with per-cascade framebuffers.
 """
 mutable struct VulkanCascadedShadowMap <: AbstractCascadedShadowMap
     num_cascades::Int
-    cascade_framebuffers::Vector{Framebuffer}
+    cascade_framebuffers::Vector{VkFramebuffer}
     cascade_render_passes::Vector{RenderPass}
     cascade_depth_textures::Vector{VulkanGPUTexture}
     cascade_matrices::Vector{Mat4f}

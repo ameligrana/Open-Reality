@@ -199,7 +199,7 @@ void main() {
 const VK_DEFERRED_LIGHTING_FRAG = """
 #version 450
 
-// Per-frame uniforms reused as UBO for the lighting pass
+// Per-frame uniforms (set 0, binding 0)
 layout(set = 0, binding = 0) uniform LightPassUBO {
     mat4 view;
     mat4 projection;
@@ -209,32 +209,51 @@ layout(set = 0, binding = 0) uniform LightPassUBO {
     float _pad1, _pad2, _pad3;
 } frame;
 
-// G-Buffer textures
+// G-Buffer textures (set 0, bindings 1-5)
 layout(set = 0, binding = 1) uniform sampler2D gAlbedoMetallic;
 layout(set = 0, binding = 2) uniform sampler2D gNormalRoughness;
 layout(set = 0, binding = 3) uniform sampler2D gEmissiveAO;
 layout(set = 0, binding = 4) uniform sampler2D gAdvancedMaterial;
 layout(set = 0, binding = 5) uniform sampler2D gDepth;
-
-// SSAO result (binding 6)
 layout(set = 0, binding = 6) uniform sampler2D ssaoTexture;
-
-// SSR result (binding 7)
 layout(set = 0, binding = 7) uniform sampler2D ssrTexture;
+
+// Light data (set 1)
+struct PointLight {
+    vec4 position;
+    vec4 color;
+    float intensity;
+    float range;
+    float _pad1, _pad2;
+};
+
+struct DirLight {
+    vec4 direction;
+    vec4 color;
+    float intensity;
+    float _pad1, _pad2, _pad3;
+};
+
+layout(set = 1, binding = 0) uniform LightData {
+    PointLight point_lights[16];
+    DirLight dir_lights[4];
+    int num_point_lights;
+    int num_dir_lights;
+    int has_ibl;
+    float ibl_intensity;
+} lights;
 
 layout(location = 0) in vec2 fragUV;
 layout(location = 0) out vec4 outColor;
 
 const float PI = 3.14159265359;
 
-// Reconstruct world position from depth
 vec3 reconstructWorldPos(vec2 uv, float depth) {
     vec4 clipPos = vec4(uv * 2.0 - 1.0, depth, 1.0);
     vec4 worldPos = frame.inv_view_proj * clipPos;
     return worldPos.xyz / worldPos.w;
 }
 
-// Cook-Torrance BRDF
 float DistributionGGX(vec3 N, vec3 H, float roughness) {
     float a = roughness * roughness;
     float a2 = a * a;
@@ -258,38 +277,20 @@ vec3 FresnelSchlick(float cosTheta, vec3 F0) {
     return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
 }
 
-struct PointLight {
-    vec4 position;
-    vec4 color;
-    float intensity;
-    float range;
-    float _pad1, _pad2;
-};
-
-struct DirLight {
-    vec4 direction;
-    vec4 color;
-    float intensity;
-    float _pad1, _pad2, _pad3;
-};
-
-// These are packed inline since the lighting pass uses the fullscreen pass layout
-// In practice, we'd pass them via a separate UBO but for simplicity we use push constants
-// or a secondary descriptor set. For this implementation, light data is embedded.
-// TODO: When integrating with the full backend, lights come from a separate UBO.
-
 void main() {
-    // Sample G-Buffer
     vec4 albedoMetallic = texture(gAlbedoMetallic, fragUV);
     vec4 normalRoughness = texture(gNormalRoughness, fragUV);
     vec4 emissiveAO = texture(gEmissiveAO, fragUV);
-    vec4 advancedMat = texture(gAdvancedMaterial, fragUV);
     float depth = texture(gDepth, fragUV).r;
 
-    if (depth >= 1.0) {
-        outColor = vec4(0.0, 0.0, 0.0, 1.0);
-        return;
+    // DEBUG: output raw G-buffer albedo to check if G-buffer pass works
+    // Red channel of albedo > 0 = green, else magenta (for background)
+    if (albedoMetallic.r > 0.001 || albedoMetallic.g > 0.001 || albedoMetallic.b > 0.001) {
+        outColor = vec4(albedoMetallic.rgb, 1.0);
+    } else {
+        outColor = vec4(0.1, 0.0, 0.1, 1.0); // dark magenta for empty/background pixels
     }
+    return;
 
     vec3 albedo = albedoMetallic.rgb;
     float metallic = albedoMetallic.a;
@@ -297,19 +298,53 @@ void main() {
     float roughness = normalRoughness.a;
     vec3 emissive = emissiveAO.rgb;
     float ao = emissiveAO.a;
-    float clearcoat = advancedMat.r;
-    float subsurface = advancedMat.g;
 
     vec3 worldPos = reconstructWorldPos(fragUV, depth);
     vec3 V = normalize(frame.camera_pos.xyz - worldPos);
-
     vec3 F0 = mix(vec3(0.04), albedo, metallic);
 
     // Ambient (modulated by SSAO)
     float ssao = texture(ssaoTexture, fragUV).r;
     vec3 ambient = vec3(0.03) * albedo * ao * ssao;
-
     vec3 Lo = ambient;
+
+    // Directional lights
+    for (int i = 0; i < lights.num_dir_lights; i++) {
+        vec3 L = normalize(-lights.dir_lights[i].direction.xyz);
+        vec3 H = normalize(V + L);
+        float NdotL = max(dot(N, L), 0.0);
+
+        float D = DistributionGGX(N, H, roughness);
+        float G = GeometrySmith(N, V, L, roughness);
+        vec3 F = FresnelSchlick(max(dot(H, V), 0.0), F0);
+
+        vec3 specular = (D * G * F) / (4.0 * max(dot(N, V), 0.0) * NdotL + 0.0001);
+        vec3 kD = (vec3(1.0) - F) * (1.0 - metallic);
+        vec3 radiance = lights.dir_lights[i].color.rgb * lights.dir_lights[i].intensity;
+        Lo += (kD * albedo / PI + specular) * radiance * NdotL;
+    }
+
+    // Point lights
+    for (int i = 0; i < lights.num_point_lights; i++) {
+        vec3 lightPos = lights.point_lights[i].position.xyz;
+        vec3 L = normalize(lightPos - worldPos);
+        vec3 H = normalize(V + L);
+        float NdotL = max(dot(N, L), 0.0);
+
+        float dist = length(lightPos - worldPos);
+        float attenuation = 1.0 / (dist * dist + 0.0001);
+        float rangeFactor = clamp(1.0 - pow(dist / max(lights.point_lights[i].range, 0.001), 4.0), 0.0, 1.0);
+        attenuation *= rangeFactor * rangeFactor;
+
+        float D = DistributionGGX(N, H, roughness);
+        float G = GeometrySmith(N, V, L, roughness);
+        vec3 F = FresnelSchlick(max(dot(H, V), 0.0), F0);
+
+        vec3 specular = (D * G * F) / (4.0 * max(dot(N, V), 0.0) * NdotL + 0.0001);
+        vec3 kD = (vec3(1.0) - F) * (1.0 - metallic);
+        vec3 radiance = lights.point_lights[i].color.rgb * lights.point_lights[i].intensity * attenuation;
+        Lo += (kD * albedo / PI + specular) * radiance * NdotL;
+    }
 
     // Emissive
     Lo += emissive;
@@ -379,13 +414,13 @@ function vk_create_deferred_pipeline(device::Device, physical_device::PhysicalDe
         "vulkan_gbuffer", VK_GBUFFER_VERT, VK_GBUFFER_FRAG, compile_fn
     )
 
-    # Create deferred lighting pipeline
+    # Create deferred lighting pipeline (set 0 = fullscreen pass, set 1 = lighting data)
     pipeline.lighting_pipeline = vk_compile_and_create_pipeline(
         device, VK_FULLSCREEN_QUAD_VERT, VK_DEFERRED_LIGHTING_FRAG,
         VulkanPipelineConfig(
             pipeline.lighting_target.render_pass, UInt32(0),
             vk_fullscreen_vertex_bindings(), vk_fullscreen_vertex_attributes(),
-            [fullscreen_layout], PushConstantRange[],
+            [fullscreen_layout, lighting_layout], PushConstantRange[],
             false, false, false,
             CULL_MODE_NONE, FRONT_FACE_COUNTER_CLOCKWISE,
             1, width, height
@@ -422,13 +457,13 @@ function vk_destroy_deferred_pipeline!(device::Device, pipeline::VulkanDeferredP
         vk_destroy_render_target!(device, pipeline.lighting_target)
     end
     if pipeline.lighting_pipeline !== nothing
-        destroy_pipeline(device, pipeline.lighting_pipeline.pipeline)
-        destroy_pipeline_layout(device, pipeline.lighting_pipeline.pipeline_layout)
+        finalize(pipeline.lighting_pipeline.pipeline)
+        finalize(pipeline.lighting_pipeline.pipeline_layout)
     end
     if pipeline.gbuffer_shader_library !== nothing
         for (_, variant) in pipeline.gbuffer_shader_library.variants
-            destroy_pipeline(device, variant.pipeline)
-            destroy_pipeline_layout(device, variant.pipeline_layout)
+            finalize(variant.pipeline)
+            finalize(variant.pipeline_layout)
         end
     end
     if pipeline.ssao_pass !== nothing

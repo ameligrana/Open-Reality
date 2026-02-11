@@ -16,8 +16,8 @@ end
 """
 function vk_query_swapchain_support(physical_device::PhysicalDevice, surface::SurfaceKHR)
     caps = unwrap(get_physical_device_surface_capabilities_khr(physical_device, surface))
-    formats = unwrap(get_physical_device_surface_formats_khr(physical_device, surface))
-    modes = unwrap(get_physical_device_surface_present_modes_khr(physical_device, surface))
+    formats = unwrap(get_physical_device_surface_formats_khr(physical_device; surface=surface))
+    modes = unwrap(get_physical_device_surface_present_modes_khr(physical_device; surface=surface))
     return SwapchainSupportDetails(caps, formats, modes)
 end
 
@@ -142,7 +142,7 @@ function vk_create_swapchain!(backend)
     _create_present_render_pass!(backend, surface_format.format)
 
     # Create swapchain framebuffers
-    backend.swapchain_framebuffers = Framebuffer[]
+    backend.swapchain_framebuffers = VkFramebuffer[]
     for view in backend.swapchain_views
         fb_info = FramebufferCreateInfo(
             backend.present_render_pass,
@@ -230,7 +230,8 @@ function _create_present_render_pass!(backend, color_format::Format)
         PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
         PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
         AccessFlag(0),
-        ACCESS_COLOR_ATTACHMENT_WRITE_BIT | ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+        ACCESS_COLOR_ATTACHMENT_WRITE_BIT | ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+        DependencyFlag(0)
     )
 
     rp_info = RenderPassCreateInfo(
@@ -253,30 +254,30 @@ function vk_destroy_swapchain_resources!(backend)
     unwrap(device_wait_idle(backend.device))
 
     for fb in backend.swapchain_framebuffers
-        destroy_framebuffer(backend.device, fb)
+        finalize(fb)
     end
     empty!(backend.swapchain_framebuffers)
 
     for view in backend.swapchain_views
-        destroy_image_view(backend.device, view)
+        finalize(view)
     end
     empty!(backend.swapchain_views)
 
     if backend.depth_view !== nothing
-        destroy_image_view(backend.device, backend.depth_view)
+        finalize(backend.depth_view)
         backend.depth_view = nothing
     end
     if backend.depth_image !== nothing
-        destroy_image(backend.device, backend.depth_image)
+        finalize(backend.depth_image)
         backend.depth_image = nothing
     end
     if backend.depth_memory !== nothing
-        free_memory(backend.device, backend.depth_memory)
+        finalize(backend.depth_memory)
         backend.depth_memory = nothing
     end
 
     if backend.present_render_pass !== nothing
-        destroy_render_pass(backend.device, backend.present_render_pass)
+        finalize(backend.present_render_pass)
         backend.present_render_pass = nothing
     end
 
@@ -313,7 +314,7 @@ function vk_recreate_swapchain!(backend)
 
     # Destroy old swapchain
     if old_swapchain !== nothing
-        destroy_swapchain_khr(backend.device, old_swapchain)
+        finalize(old_swapchain)
     end
 
     backend.framebuffer_resized = false

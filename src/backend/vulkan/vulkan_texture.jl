@@ -125,9 +125,9 @@ function vk_upload_texture(device::Device, physical_device::PhysicalDevice,
 
     vk_end_single_time_commands(device, command_pool, queue, cmd)
 
-    # Cleanup staging
-    destroy_buffer(device, staging_buf)
-    free_memory(device, staging_mem)
+    # Cleanup staging (use finalize to properly deregister GC finalizer)
+    finalize(staging_buf)
+    finalize(staging_mem)
 
     # Create image view
     view_info = ImageViewCreateInfo(
@@ -159,14 +159,16 @@ function _generate_mipmaps!(cmd::CommandBuffer, image::Image, format::Format,
     for i in 1:(mip_levels - 1)
         # Transition level i-1 from TRANSFER_DST to TRANSFER_SRC
         barrier = ImageMemoryBarrier(
+            C_NULL,
             ACCESS_TRANSFER_WRITE_BIT, ACCESS_TRANSFER_READ_BIT,
             IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
             QUEUE_FAMILY_IGNORED, QUEUE_FAMILY_IGNORED,
             image,
             ImageSubresourceRange(IMAGE_ASPECT_COLOR_BIT, UInt32(i - 1), UInt32(1), UInt32(0), UInt32(1))
         )
-        cmd_pipeline_barrier(cmd, PIPELINE_STAGE_TRANSFER_BIT, PIPELINE_STAGE_TRANSFER_BIT,
-                              DependencyFlag(0), [], [], [barrier])
+        cmd_pipeline_barrier(cmd, [], [], [barrier];
+                              src_stage_mask=PIPELINE_STAGE_TRANSFER_BIT, dst_stage_mask=PIPELINE_STAGE_TRANSFER_BIT,
+                              dependency_flags=DependencyFlag(0))
 
         next_width = max(Int32(1), mip_width ÷ Int32(2))
         next_height = max(Int32(1), mip_height ÷ Int32(2))
@@ -183,14 +185,16 @@ function _generate_mipmaps!(cmd::CommandBuffer, image::Image, format::Format,
 
         # Transition level i-1 to SHADER_READ_ONLY
         barrier2 = ImageMemoryBarrier(
+            C_NULL,
             ACCESS_TRANSFER_READ_BIT, ACCESS_SHADER_READ_BIT,
             IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
             QUEUE_FAMILY_IGNORED, QUEUE_FAMILY_IGNORED,
             image,
             ImageSubresourceRange(IMAGE_ASPECT_COLOR_BIT, UInt32(i - 1), UInt32(1), UInt32(0), UInt32(1))
         )
-        cmd_pipeline_barrier(cmd, PIPELINE_STAGE_TRANSFER_BIT, PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                              DependencyFlag(0), [], [], [barrier2])
+        cmd_pipeline_barrier(cmd, [], [], [barrier2];
+                              src_stage_mask=PIPELINE_STAGE_TRANSFER_BIT, dst_stage_mask=PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                              dependency_flags=DependencyFlag(0))
 
         mip_width = next_width
         mip_height = next_height
@@ -198,14 +202,16 @@ function _generate_mipmaps!(cmd::CommandBuffer, image::Image, format::Format,
 
     # Transition last mip level
     last_barrier = ImageMemoryBarrier(
+        C_NULL,
         ACCESS_TRANSFER_WRITE_BIT, ACCESS_SHADER_READ_BIT,
         IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
         QUEUE_FAMILY_IGNORED, QUEUE_FAMILY_IGNORED,
         image,
         ImageSubresourceRange(IMAGE_ASPECT_COLOR_BIT, UInt32(mip_levels - 1), UInt32(1), UInt32(0), UInt32(1))
     )
-    cmd_pipeline_barrier(cmd, PIPELINE_STAGE_TRANSFER_BIT, PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
-                          DependencyFlag(0), [], [], [last_barrier])
+    cmd_pipeline_barrier(cmd, [], [], [last_barrier];
+                          src_stage_mask=PIPELINE_STAGE_TRANSFER_BIT, dst_stage_mask=PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                          dependency_flags=DependencyFlag(0))
     return nothing
 end
 
@@ -259,10 +265,10 @@ end
 Destroy a VulkanGPUTexture and free its resources.
 """
 function vk_destroy_texture!(device::Device, texture::VulkanGPUTexture)
-    destroy_sampler(device, texture.sampler)
-    destroy_image_view(device, texture.view)
-    destroy_image(device, texture.image)
-    free_memory(device, texture.memory)
+    finalize(texture.sampler)
+    finalize(texture.view)
+    finalize(texture.image)
+    finalize(texture.memory)
     return nothing
 end
 
@@ -290,7 +296,7 @@ function vk_create_render_target_texture(device::Device, physical_device::Physic
                                           aspect::ImageAspectFlag=IMAGE_ASPECT_COLOR_BIT,
                                           usage::Union{ImageUsageFlag, Nothing}=nothing,
                                           initial_layout::ImageLayout=IMAGE_LAYOUT_UNDEFINED)
-    is_depth = (aspect & IMAGE_ASPECT_DEPTH_BIT) != 0
+    is_depth = (aspect & IMAGE_ASPECT_DEPTH_BIT) != ImageAspectFlag(0)
 
     if usage === nothing
         usage = if is_depth

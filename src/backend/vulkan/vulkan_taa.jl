@@ -87,7 +87,7 @@ end
 function vk_destroy_taa_pass!(device::Device, taa::VulkanTAAPass)
     vk_destroy_render_target!(device, taa.history_target)
     vk_destroy_render_target!(device, taa.current_target)
-    destroy_pipeline(device, taa.taa_pipeline.pipeline)
-    destroy_pipeline_layout(device, taa.taa_pipeline.pipeline_layout)
+    finalize(taa.taa_pipeline.pipeline)
+    finalize(taa.taa_pipeline.pipeline_layout)
     return nothing
 end

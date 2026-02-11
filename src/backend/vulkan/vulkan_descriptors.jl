@@ -21,8 +21,9 @@ Set 0: per-frame UBO at binding 0.
 function vk_create_per_frame_layout(device::Device)
     bindings = [
         DescriptorSetLayoutBinding(
-            UInt32(0), DESCRIPTOR_TYPE_UNIFORM_BUFFER, UInt32(1),
-            SHADER_STAGE_VERTEX_BIT | SHADER_STAGE_FRAGMENT_BIT
+            UInt32(0), DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            SHADER_STAGE_VERTEX_BIT | SHADER_STAGE_FRAGMENT_BIT;
+            descriptor_count=1
         )
     ]
     info = DescriptorSetLayoutCreateInfo(bindings)
@@ -38,15 +39,17 @@ function vk_create_per_material_layout(device::Device)
     bindings = [
         # Material UBO
         DescriptorSetLayoutBinding(
-            UInt32(0), DESCRIPTOR_TYPE_UNIFORM_BUFFER, UInt32(1),
-            SHADER_STAGE_FRAGMENT_BIT
+            UInt32(0), DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            SHADER_STAGE_FRAGMENT_BIT;
+            descriptor_count=1
         )
     ]
     # Material textures (6 combined image samplers)
     for i in 1:VK_MAX_MATERIAL_TEXTURES
         push!(bindings, DescriptorSetLayoutBinding(
-            UInt32(i), DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, UInt32(1),
-            SHADER_STAGE_FRAGMENT_BIT
+            UInt32(i), DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            SHADER_STAGE_FRAGMENT_BIT;
+            descriptor_count=1
         ))
     end
     info = DescriptorSetLayoutCreateInfo(bindings)
@@ -63,27 +66,31 @@ function vk_create_lighting_layout(device::Device)
     bindings = [
         # Light UBO
         DescriptorSetLayoutBinding(
-            UInt32(0), DESCRIPTOR_TYPE_UNIFORM_BUFFER, UInt32(1),
-            SHADER_STAGE_FRAGMENT_BIT
+            UInt32(0), DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            SHADER_STAGE_FRAGMENT_BIT;
+            descriptor_count=1
         ),
         # Shadow UBO
         DescriptorSetLayoutBinding(
-            UInt32(1), DESCRIPTOR_TYPE_UNIFORM_BUFFER, UInt32(1),
-            SHADER_STAGE_FRAGMENT_BIT
+            UInt32(1), DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            SHADER_STAGE_FRAGMENT_BIT;
+            descriptor_count=1
         ),
     ]
     # CSM depth textures (4 cascades)
     for i in 0:(VK_MAX_CSM_CASCADES - 1)
         push!(bindings, DescriptorSetLayoutBinding(
-            UInt32(2 + i), DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, UInt32(1),
-            SHADER_STAGE_FRAGMENT_BIT
+            UInt32(2 + i), DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            SHADER_STAGE_FRAGMENT_BIT;
+            descriptor_count=1
         ))
     end
     # IBL textures (irradiance, prefilter, BRDF LUT)
     for i in 0:(VK_MAX_IBL_TEXTURES - 1)
         push!(bindings, DescriptorSetLayoutBinding(
-            UInt32(6 + i), DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, UInt32(1),
-            SHADER_STAGE_FRAGMENT_BIT
+            UInt32(6 + i), DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            SHADER_STAGE_FRAGMENT_BIT;
+            descriptor_count=1
         ))
     end
     info = DescriptorSetLayoutCreateInfo(bindings)
@@ -100,14 +107,16 @@ Bindings 1-8: input textures (combined image samplers)
 function vk_create_fullscreen_pass_layout(device::Device; num_textures::Int=8)
     bindings = [
         DescriptorSetLayoutBinding(
-            UInt32(0), DESCRIPTOR_TYPE_UNIFORM_BUFFER, UInt32(1),
-            SHADER_STAGE_FRAGMENT_BIT
+            UInt32(0), DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+            SHADER_STAGE_FRAGMENT_BIT;
+            descriptor_count=1
         )
     ]
     for i in 1:num_textures
         push!(bindings, DescriptorSetLayoutBinding(
-            UInt32(i), DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, UInt32(1),
-            SHADER_STAGE_FRAGMENT_BIT
+            UInt32(i), DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            SHADER_STAGE_FRAGMENT_BIT;
+            descriptor_count=1
         ))
     end
     info = DescriptorSetLayoutCreateInfo(bindings)
