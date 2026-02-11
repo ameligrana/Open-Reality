@@ -1,0 +1,544 @@
+# API Reference
+
+Complete reference for all public types, functions, and components in OpenReality.
+
+---
+
+## Core Functions
+
+### `render`
+
+```julia
+render(scene::Scene;
+       backend::AbstractBackend = OpenGLBackend(),
+       width::Int = 1280,
+       height::Int = 720,
+       title::String = "OpenReality",
+       post_process::Union{PostProcessConfig, Nothing} = nothing)
+```
+
+Opens a window and starts the render loop for the given scene. Blocks until the window is closed.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `scene` | *(required)* | The scene to render |
+| `backend` | `OpenGLBackend()` | Rendering backend (`OpenGLBackend`, `VulkanBackend`, `MetalBackend`) |
+| `width` | `1280` | Window width in pixels |
+| `height` | `720` | Window height in pixels |
+| `title` | `"OpenReality"` | Window title |
+| `post_process` | `nothing` | Post-processing configuration |
+
+---
+
+### `scene`
+
+```julia
+scene(entity_defs::Vector) -> Scene
+```
+
+Creates a `Scene` from a vector of `EntityDef` values. Entities are materialized with real `EntityID`s, components are registered in the global ECS, and parent-child hierarchies are established.
+
+```julia
+s = scene([
+    entity([TransformComponent(), MeshComponent()]),
+    entity([CameraComponent()])
+])
+```
+
+---
+
+### `entity`
+
+```julia
+entity(components::Vector; children::Vector = []) -> EntityDef
+```
+
+Creates an `EntityDef` — a blueprint for an entity with its components and optional children. Entity defs are not live entities; they become real entities when passed to `scene()`.
+
+```julia
+parent = entity([
+    cube_mesh(),
+    MaterialComponent(),
+    transform(position=Vec3d(0, 1, 0))
+], children=[
+    entity([CameraComponent(), transform()])
+])
+```
+
+---
+
+### `create_player`
+
+```julia
+create_player(;
+    position::Vec3d = Vec3d(0, 1.7, 0),
+    move_speed::Float32 = 5.0f0,
+    sprint_multiplier::Float32 = 2.0f0,
+    mouse_sensitivity::Float32 = 0.002f0,
+    mesh::Union{MeshComponent, Nothing} = nothing,
+    material::Union{MaterialComponent, Nothing} = nothing,
+    fov::Float32 = 70.0f0,
+    aspect::Float32 = Float32(16/9),
+    near::Float32 = 0.1f0,
+    far::Float32 = 500.0f0
+) -> EntityDef
+```
+
+Convenience function that creates a player entity with FPS controls and an attached camera child.
+
+The returned entity includes:
+- `PlayerComponent` with the given movement settings
+- `TransformComponent` at the given position
+- `ColliderComponent` with AABB shape `(0.3, 0.9, 0.3)` half-extents
+- `RigidBodyComponent` with `BODY_KINEMATIC` type
+- A child entity with `CameraComponent` and a local `transform()`
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `position` | `Vec3d(0, 1.7, 0)` | Spawn position |
+| `move_speed` | `5.0` | Movement speed (units/sec) |
+| `sprint_multiplier` | `2.0` | Speed multiplier when holding Shift |
+| `mouse_sensitivity` | `0.002` | Mouse look sensitivity |
+| `mesh` | `nothing` | Optional visible body mesh |
+| `material` | `nothing` | Optional material for visible body |
+| `fov` | `70.0` | Camera field of view (degrees) |
+| `aspect` | `16/9` | Camera aspect ratio |
+| `near` | `0.1` | Near clipping plane |
+| `far` | `500.0` | Far clipping plane |
+
+---
+
+### `load_model`
+
+```julia
+load_model(path::String; kwargs...) -> Vector{EntityDef}
+```
+
+Loads a 3D model file and returns a vector of `EntityDef` values ready for use with `scene()`.
+
+**Supported formats:**
+- `.obj` — Wavefront OBJ (keyword: `default_material::MaterialComponent`)
+- `.gltf`, `.glb` — glTF 2.0 (keyword: `base_dir::String` for texture paths)
+
+---
+
+## Components
+
+All components are subtypes of `abstract type Component end`.
+
+### `TransformComponent`
+
+```julia
+TransformComponent(;
+    position::Union{Vec3d, Observable{Vec3d}} = Vec3d(0, 0, 0),
+    rotation::Union{Quaterniond, Observable{Quaterniond}} = Quaterniond(1, 0, 0, 0),
+    scale::Union{Vec3d, Observable{Vec3d}} = Vec3d(1, 1, 1),
+    parent::Union{EntityID, Nothing} = nothing
+)
+```
+
+Position, rotation, and scale of an entity. Properties are wrapped in `Observable` for reactive updates. Rotation is a quaternion in `(w, x, y, z)` format where `w=1` is the identity.
+
+**Convenience constructor:**
+
+```julia
+transform(;
+    position = Vec3d(0, 0, 0),
+    rotation = Quaterniond(1, 0, 0, 0),
+    scale = Vec3d(1, 1, 1)
+) -> TransformComponent
+```
+
+The `transform()` helper is the recommended way to create transforms in scene definitions.
+
+---
+
+### `MeshComponent`
+
+```julia
+MeshComponent(;
+    vertices::Vector{Point3f} = Point3f[],
+    indices::Vector{UInt32} = UInt32[],
+    normals::Vector{Vec3f} = Vec3f[],
+    uvs::Vector{Vec2f} = Vec2f[]
+)
+```
+
+Raw 3D mesh data. In practice, use the built-in primitives or `load_model()` instead of constructing this directly.
+
+---
+
+### `MaterialComponent`
+
+```julia
+MaterialComponent(;
+    color::RGB{Float32} = RGB{Float32}(1, 1, 1),
+    metallic::Float32 = 0.0f0,
+    roughness::Float32 = 0.5f0,
+    albedo_map::Union{TextureRef, Nothing} = nothing,
+    normal_map::Union{TextureRef, Nothing} = nothing,
+    metallic_roughness_map::Union{TextureRef, Nothing} = nothing,
+    ao_map::Union{TextureRef, Nothing} = nothing,
+    emissive_map::Union{TextureRef, Nothing} = nothing,
+    emissive_factor::Vec3f = Vec3f(0, 0, 0),
+    opacity::Float32 = 1.0f0,
+    alpha_cutoff::Float32 = 0.0f0,
+    clearcoat::Float32 = 0.0f0,
+    clearcoat_roughness::Float32 = 0.0f0,
+    clearcoat_map::Union{TextureRef, Nothing} = nothing,
+    height_map::Union{TextureRef, Nothing} = nothing,
+    parallax_height_scale::Float32 = 0.0f0,
+    subsurface::Float32 = 0.0f0,
+    subsurface_color::Vec3f = Vec3f(1, 1, 1)
+)
+```
+
+PBR material using the metallic/roughness workflow.
+
+**Core PBR properties:**
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `color` | `RGB(1,1,1)` | Base color (albedo) |
+| `metallic` | `0.0` | 0 = dielectric, 1 = metal |
+| `roughness` | `0.5` | 0 = mirror, 1 = rough |
+| `opacity` | `1.0` | 0 = transparent, 1 = opaque |
+| `alpha_cutoff` | `0.0` | Fragments below this alpha are discarded |
+
+**Texture maps:**
+
+| Field | Description |
+|-------|-------------|
+| `albedo_map` | Base color texture (overrides `color`) |
+| `normal_map` | Tangent-space normal map |
+| `metallic_roughness_map` | Combined metallic (B) + roughness (G) texture |
+| `ao_map` | Ambient occlusion map |
+| `emissive_map` | Emissive texture |
+| `clearcoat_map` | Clear coat intensity map |
+| `height_map` | Height map for parallax occlusion mapping |
+
+Textures are referenced via `TextureRef("path/to/texture.png")` and loaded lazily at render time.
+
+**Advanced features:**
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `emissive_factor` | `Vec3f(0,0,0)` | Emissive color/intensity (HDR values for bloom) |
+| `clearcoat` | `0.0` | Clear coat layer intensity (car paint, lacquer) |
+| `clearcoat_roughness` | `0.0` | Clear coat roughness |
+| `parallax_height_scale` | `0.0` | Parallax mapping displacement scale |
+| `subsurface` | `0.0` | Subsurface scattering intensity (skin, wax, leaves) |
+| `subsurface_color` | `Vec3f(1,1,1)` | Color tint for subsurface scattering |
+
+---
+
+### `CameraComponent`
+
+```julia
+CameraComponent(;
+    fov::Float32 = 60.0f0,
+    near::Float32 = 0.1f0,
+    far::Float32 = 1000.0f0,
+    aspect::Float32 = 16.0f0 / 9.0f0
+)
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `fov` | `60.0` | Field of view in degrees |
+| `near` | `0.1` | Near clipping plane distance |
+| `far` | `1000.0` | Far clipping plane distance |
+| `aspect` | `16/9` | Width-to-height ratio |
+
+---
+
+### `PointLightComponent`
+
+```julia
+PointLightComponent(;
+    color::RGB{Float32} = RGB{Float32}(1, 1, 1),
+    intensity::Float32 = 1.0f0,
+    range::Float32 = 10.0f0
+)
+```
+
+Omnidirectional point light. Place it in the scene with a `transform()`.
+
+---
+
+### `DirectionalLightComponent`
+
+```julia
+DirectionalLightComponent(;
+    color::RGB{Float32} = RGB{Float32}(1, 1, 1),
+    intensity::Float32 = 1.0f0,
+    direction::Vec3f = Vec3f(0, -1, 0)
+)
+```
+
+Infinite-distance directional light (like the sun). Casts cascaded shadow maps automatically.
+
+---
+
+### `IBLComponent`
+
+```julia
+IBLComponent(;
+    environment_path::String = "",
+    intensity::Float32 = 1.0f0,
+    enabled::Bool = true
+)
+```
+
+Image-Based Lighting for photorealistic environment lighting and reflections. Use `environment_path="sky"` for a procedural sky, or provide a path to an HDR environment map. Only one IBL should be active per scene.
+
+---
+
+### `PlayerComponent`
+
+```julia
+PlayerComponent(;
+    move_speed::Float32 = 5.0f0,
+    sprint_multiplier::Float32 = 2.0f0,
+    mouse_sensitivity::Float32 = 0.002f0,
+    yaw::Float64 = 0.0,
+    pitch::Float64 = 0.0
+)
+```
+
+Marks an entity as the player for FPS controls. Typically created via `create_player()` rather than directly.
+
+---
+
+### `ColliderComponent`
+
+```julia
+ColliderComponent(;
+    shape::ColliderShape = AABBShape(Vec3f(0.5, 0.5, 0.5)),
+    offset::Vec3f = Vec3f(0, 0, 0)
+)
+```
+
+Attaches a collision shape to an entity. The shape is defined in local space; the physics system positions it using the entity's world transform.
+
+**Shapes:**
+- `AABBShape(half_extents::Vec3f)` — axis-aligned bounding box
+- `SphereShape(radius::Float32)` — sphere
+
+**Helper functions:**
+- `collider_from_mesh(mesh::MeshComponent) -> ColliderComponent` — auto-generates an AABB from mesh bounds
+- `sphere_collider_from_mesh(mesh::MeshComponent) -> ColliderComponent` — auto-generates a bounding sphere from mesh vertices
+
+---
+
+### `RigidBodyComponent`
+
+```julia
+RigidBodyComponent(;
+    body_type::BodyType = BODY_DYNAMIC,
+    velocity::Vec3d = Vec3d(0, 0, 0),
+    mass::Float64 = 1.0,
+    restitution::Float32 = 0.0f0,
+    grounded::Bool = false
+)
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `body_type` | `BODY_DYNAMIC` | How the entity participates in physics |
+| `velocity` | `Vec3d(0,0,0)` | Current velocity |
+| `mass` | `1.0` | Mass in kg |
+| `restitution` | `0.0` | Bounciness (0 = no bounce, 1 = perfectly elastic) |
+| `grounded` | `false` | Whether the entity is currently on the ground |
+
+**Body types (`BodyType` enum):**
+- `BODY_STATIC` — never moves (walls, floors, terrain)
+- `BODY_KINEMATIC` — moved by code, not by physics forces (player controller)
+- `BODY_DYNAMIC` — affected by gravity and collision response
+
+---
+
+### `AnimationComponent`
+
+```julia
+AnimationComponent(;
+    clips::Vector{AnimationClip} = AnimationClip[],
+    active_clip::Int = 1,
+    time::Float32 = 0.0f0,
+    playing::Bool = true,
+    looping::Bool = true
+)
+```
+
+Keyframe-based animation. Typically populated by `load_model()` from glTF files.
+
+**Related types:**
+
+```julia
+struct AnimationClip
+    name::String
+    channels::Vector{AnimationChannel}
+    duration::Float32
+end
+
+struct AnimationChannel
+    target_entity::EntityID
+    target_property::Symbol    # :position, :rotation, or :scale
+    times::Vector{Float32}
+    values::Vector{Float32}
+    interpolation::InterpolationMode  # INTERP_STEP, INTERP_LINEAR, INTERP_CUBICSPLINE
+end
+```
+
+---
+
+## Primitives
+
+### `cube_mesh`
+
+```julia
+cube_mesh(; size::Float32 = 1.0f0) -> MeshComponent
+```
+
+Unit cube centered at the origin with proper face normals and UV coordinates.
+
+### `sphere_mesh`
+
+```julia
+sphere_mesh(; radius::Float32 = 0.5f0, segments::Int = 32, rings::Int = 16) -> MeshComponent
+```
+
+UV sphere centered at the origin.
+
+### `plane_mesh`
+
+```julia
+plane_mesh(; width::Float32 = 1.0f0, depth::Float32 = 1.0f0) -> MeshComponent
+```
+
+Horizontal plane at Y=0, facing up (+Y).
+
+---
+
+## Post-Processing
+
+### `PostProcessConfig`
+
+```julia
+PostProcessConfig(;
+    bloom_enabled::Bool = false,
+    bloom_threshold::Float32 = 1.0f0,
+    bloom_intensity::Float32 = 0.3f0,
+    ssao_enabled::Bool = false,
+    ssao_radius::Float32 = 0.5f0,
+    ssao_samples::Int = 16,
+    tone_mapping::ToneMappingMode = TONEMAP_REINHARD,
+    fxaa_enabled::Bool = false,
+    gamma::Float32 = 2.2f0
+)
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `bloom_enabled` | `false` | Bloom glow effect |
+| `bloom_threshold` | `1.0` | Brightness threshold for bloom |
+| `bloom_intensity` | `0.3` | Bloom strength |
+| `ssao_enabled` | `false` | Screen-space ambient occlusion |
+| `ssao_radius` | `0.5` | SSAO sampling radius |
+| `ssao_samples` | `16` | Number of SSAO samples per pixel |
+| `tone_mapping` | `TONEMAP_REINHARD` | HDR-to-LDR tone mapping operator |
+| `fxaa_enabled` | `false` | Fast approximate anti-aliasing |
+| `gamma` | `2.2` | Gamma correction value |
+
+### `ToneMappingMode`
+
+```julia
+@enum ToneMappingMode TONEMAP_REINHARD TONEMAP_ACES TONEMAP_UNCHARTED2
+```
+
+- `TONEMAP_REINHARD` — classic, preserves color
+- `TONEMAP_ACES` — filmic, cinematic look
+- `TONEMAP_UNCHARTED2` — Uncharted 2 tone curve
+
+---
+
+## Backends
+
+### `OpenGLBackend`
+
+Default backend. Works on all platforms. Uses OpenGL 3.3 core profile.
+
+### `VulkanBackend`
+
+Available on Linux and Windows. Requires Vulkan SDK and compatible GPU drivers.
+
+### `MetalBackend`
+
+Available on macOS only. Uses the native Metal graphics API.
+
+---
+
+## ECS Operations
+
+### Entity Management
+
+```julia
+create_entity_id() -> EntityID          # Generate a new unique entity ID
+reset_entity_counter!()                 # Reset the ID counter (for fresh scenes)
+reset_component_stores!()               # Clear all component data
+```
+
+### Component Operations
+
+```julia
+add_component!(entity_id, component)    # Add or replace a component on an entity
+get_component(entity_id, Type)          # Get a component (throws if missing)
+has_component(entity_id, Type)          # Check if entity has a component type
+remove_component!(entity_id, Type)      # Remove a component from an entity
+```
+
+### Component Queries
+
+```julia
+collect_components(Type)                # Get all components of a type as Vector
+entities_with_component(Type)           # Get all entity IDs that have this type
+component_count(Type)                   # Count of entities with this component type
+iterate_components(f, Type)             # Call f(entity_id, component) for each
+```
+
+---
+
+## Scene Operations
+
+```julia
+add_entity(scene, entity_id; parent=nothing) -> Scene   # Add entity to scene
+remove_entity(scene, entity_id) -> Scene                 # Remove entity and descendants
+get_children(scene, entity_id) -> Vector{EntityID}       # Direct children
+get_parent(scene, entity_id) -> Union{EntityID, Nothing} # Parent entity
+has_entity(scene, entity_id) -> Bool                     # Check membership
+is_root(scene, entity_id) -> Bool                        # Is a root entity?
+entity_count(scene) -> Int                               # Total entity count
+get_all_descendants(scene, entity_id) -> Vector{EntityID}
+get_ancestors(scene, entity_id) -> Vector{EntityID}
+traverse_scene(scene, visitor_fn)                        # DFS traversal
+traverse_entity(scene, entity_id, visitor_fn)            # DFS from entity
+```
+
+All scene operations return a **new Scene** — the original is never mutated.
+
+---
+
+## Type Aliases
+
+```julia
+const Point3f = Point{3, Float32}
+const Vec3f = Vec{3, Float32}
+const Vec2f = Vec{2, Float32}
+const Mat4f = SMatrix{4, 4, Float32, 16}
+const Mat3f = SMatrix{3, 3, Float32, 9}
+const Vec3d = Vec{3, Float64}
+const Quaterniond = Quaternion{Float64}
+```
+
+- Use `Vec3d` for positions and transforms (double precision for numerical stability)
+- Use `Vec3f` for directions, normals, and material properties (single precision for GPU)
