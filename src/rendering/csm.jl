@@ -1,24 +1,6 @@
-# Cascaded Shadow Maps (CSM)
+# Cascaded Shadow Maps (CSM): pure math / backend-agnostic utilities
 # Eliminates shadow aliasing by using multiple shadow maps at different distances
-
-"""
-    CascadedShadowMap
-
-Cascaded shadow mapping with multiple frustum splits for improved shadow quality.
-Uses Practical Split Scheme (PSSM) for optimal split distribution.
-"""
-mutable struct CascadedShadowMap
-    num_cascades::Int
-    cascade_fbos::Vector{GLuint}
-    cascade_textures::Vector{GLuint}
-    cascade_matrices::Vector{Mat4f}
-    split_distances::Vector{Float32}  # View-space split distances
-    resolution::Int
-    depth_shader::Union{ShaderProgram, Nothing}
-
-    CascadedShadowMap(; num_cascades::Int = 4, resolution::Int = 2048) =
-        new(num_cascades, GLuint[], GLuint[], Mat4f[], Float32[], resolution, nothing)
-end
+# NOTE: OpenGL-specific types (CascadedShadowMap struct) moved to backend/opengl/
 
 """
     compute_cascade_splits(near::Float32, far::Float32, num_cascades::Int, lambda::Float32=0.5f0) -> Vector{Float32}
@@ -48,98 +30,6 @@ function compute_cascade_splits(near::Float32, far::Float32, num_cascades::Int, 
     end
 
     return splits
-end
-
-"""
-    create_csm!(csm::CascadedShadowMap, near::Float32, far::Float32)
-
-Create GPU resources for cascaded shadow maps.
-"""
-function create_csm!(csm::CascadedShadowMap, near::Float32, far::Float32)
-    # Compute split distances
-    csm.split_distances = compute_cascade_splits(near, far, csm.num_cascades)
-
-    @info "Creating CSM" cascades=csm.num_cascades resolution=csm.resolution splits=csm.split_distances
-
-    # Create framebuffers and textures for each cascade
-    resize!(csm.cascade_fbos, csm.num_cascades)
-    resize!(csm.cascade_textures, csm.num_cascades)
-    resize!(csm.cascade_matrices, csm.num_cascades)
-
-    for i in 1:csm.num_cascades
-        # Create framebuffer
-        fbo_ref = Ref(GLuint(0))
-        glGenFramebuffers(1, fbo_ref)
-        csm.cascade_fbos[i] = fbo_ref[]
-
-        # Create depth texture
-        tex_ref = Ref(GLuint(0))
-        glGenTextures(1, tex_ref)
-        csm.cascade_textures[i] = tex_ref[]
-
-        glBindTexture(GL_TEXTURE_2D, csm.cascade_textures[i])
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT24, csm.resolution, csm.resolution,
-                     0, GL_DEPTH_COMPONENT, GL_FLOAT, C_NULL)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_BORDER)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_BORDER)
-
-        # Border color white (1.0) so samples outside shadow map are fully lit
-        border_color = Float32[1.0, 1.0, 1.0, 1.0]
-        glTexParameterfv(GL_TEXTURE_2D, GL_TEXTURE_BORDER_COLOR, border_color)
-
-        # Attach to framebuffer
-        glBindFramebuffer(GL_FRAMEBUFFER, csm.cascade_fbos[i])
-        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_TEXTURE_2D,
-                               csm.cascade_textures[i], 0)
-        glDrawBuffer(GL_NONE)
-        glReadBuffer(GL_NONE)
-
-        # Verify completeness
-        status = glCheckFramebufferStatus(GL_FRAMEBUFFER)
-        if status != GL_FRAMEBUFFER_COMPLETE
-            error("CSM framebuffer $i incomplete! Status: $status")
-        end
-
-        # Initialize matrix
-        csm.cascade_matrices[i] = Mat4f(I)
-    end
-
-    glBindFramebuffer(GL_FRAMEBUFFER, GLuint(0))
-
-    # Create depth-only shader (reuse from shadow_map.jl if available)
-    # For now, we'll assume it's created elsewhere
-
-    return nothing
-end
-
-"""
-    destroy_csm!(csm::CascadedShadowMap)
-
-Release GPU resources for cascaded shadow maps.
-"""
-function destroy_csm!(csm::CascadedShadowMap)
-    for i in 1:csm.num_cascades
-        if i <= length(csm.cascade_fbos) && csm.cascade_fbos[i] != GLuint(0)
-            glDeleteFramebuffers(1, Ref(csm.cascade_fbos[i]))
-        end
-        if i <= length(csm.cascade_textures) && csm.cascade_textures[i] != GLuint(0)
-            glDeleteTextures(1, Ref(csm.cascade_textures[i]))
-        end
-    end
-
-    empty!(csm.cascade_fbos)
-    empty!(csm.cascade_textures)
-    empty!(csm.cascade_matrices)
-    empty!(csm.split_distances)
-
-    if csm.depth_shader !== nothing
-        destroy_shader_program!(csm.depth_shader)
-        csm.depth_shader = nothing
-    end
-
-    return nothing
 end
 
 """
@@ -221,45 +111,4 @@ function compute_cascade_light_matrix(view::Mat4f, proj::Mat4f, near::Float32, f
     )
 
     return light_proj * light_view
-end
-
-"""
-    render_csm_cascade!(csm::CascadedShadowMap, cascade_idx::Int, entities,
-                        view::Mat4f, proj::Mat4f, light_dir::Vec3f, gpu_cache, depth_shader)
-
-Render a single cascade of the CSM.
-"""
-function render_csm_cascade!(csm::CascadedShadowMap, cascade_idx::Int, entities,
-                            view::Mat4f, proj::Mat4f, light_dir::Vec3f,
-                            gpu_cache, depth_shader)
-    # Compute light space matrix for this cascade
-    near = csm.split_distances[cascade_idx]
-    far = csm.split_distances[cascade_idx + 1]
-
-    light_matrix = compute_cascade_light_matrix(view, proj, near, far, light_dir)
-    csm.cascade_matrices[cascade_idx] = light_matrix
-
-    # Bind framebuffer
-    glBindFramebuffer(GL_FRAMEBUFFER, csm.cascade_fbos[cascade_idx])
-    glViewport(0, 0, csm.resolution, csm.resolution)
-    glClear(GL_DEPTH_BUFFER_BIT)
-
-    # Render depth only
-    glUseProgram(depth_shader.id)
-    set_uniform!(depth_shader, "u_LightSpaceMatrix", light_matrix)
-
-    # TODO: Frustum culling per cascade
-    # For now, render all entities
-    for (entity_id, mesh, model, _) in entities
-        set_uniform!(depth_shader, "u_Model", model)
-
-        gpu_mesh = get_or_upload_mesh!(gpu_cache, entity_id, mesh)
-        glBindVertexArray(gpu_mesh.vao)
-        glDrawElements(GL_TRIANGLES, gpu_mesh.index_count, GL_UNSIGNED_INT, C_NULL)
-        glBindVertexArray(GLuint(0))
-    end
-
-    glBindFramebuffer(GL_FRAMEBUFFER, GLuint(0))
-
-    return nothing
 end

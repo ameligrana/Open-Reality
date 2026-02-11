@@ -57,27 +57,67 @@ include("systems/player_controller.jl")
 include("systems/physics.jl")
 include("systems/animation.jl")
 
-# Rendering utilities (before backend — backend needs these)
-include("rendering/shader.jl")
-include("rendering/gpu_resources.jl")
-include("rendering/texture.jl")
-include("rendering/framebuffer.jl")
-include("rendering/gbuffer.jl")
-include("rendering/shader_variants.jl")
-include("rendering/ibl.jl")
-include("rendering/ssr.jl")
-include("rendering/ssao.jl")
-include("rendering/taa.jl")
-include("rendering/deferred.jl")
-include("rendering/post_processing.jl")
-include("rendering/shadow_map.jl")
-include("rendering/csm.jl")
+# GPU Abstraction Layer (abstract types that concrete backends implement)
+include("backend/gpu_types.jl")
+
+# Rendering: backend-agnostic math, configs, and utilities
+include("rendering/shader.jl")            # placeholder — concrete type in backend/opengl/
+include("rendering/gpu_resources.jl")      # placeholder — concrete type in backend/opengl/
+include("rendering/texture.jl")            # placeholder — concrete type in backend/opengl/
+include("rendering/framebuffer.jl")        # placeholder — concrete type in backend/opengl/
+include("rendering/gbuffer.jl")            # placeholder — concrete type in backend/opengl/
+include("rendering/shader_variants.jl")    # ShaderLibrary{S} (parametric, backend-agnostic)
+include("rendering/ibl.jl")                # placeholder — concrete type in backend/opengl/
+include("rendering/ssr.jl")                # placeholder — concrete type in backend/opengl/
+include("rendering/ssao.jl")               # pure math (generate_ssao_kernel, lerp)
+include("rendering/taa.jl")                # pure math (HALTON_SAMPLES, jitter)
+include("rendering/deferred.jl")           # placeholder — concrete type in backend/opengl/
+include("rendering/post_processing.jl")    # ToneMappingMode, PostProcessConfig
+include("rendering/shadow_map.jl")         # pure math (compute_light_space_matrix)
+include("rendering/csm.jl")               # pure math (cascade computation)
 include("rendering/camera_utils.jl")
 include("rendering/frustum_culling.jl")
 
-# Backend
+# Abstract backend interface
 include("backend/abstract.jl")
-include("backend/opengl.jl")
+
+# OpenGL backend implementation (concrete types + GL calls)
+include("backend/opengl/opengl_shader.jl")       # ShaderProgram
+include("backend/opengl/opengl_mesh.jl")          # GPUMesh, GPUResourceCache
+include("backend/opengl/opengl_texture.jl")       # GPUTexture, TextureCache
+include("backend/opengl/opengl_framebuffer.jl")   # Framebuffer, GBuffer
+include("backend/opengl/opengl_shadows.jl")       # ShadowMap, CascadedShadowMap
+include("backend/opengl/opengl_ibl.jl")           # IBLEnvironment
+include("backend/opengl/opengl_ssao.jl")          # SSAOPass
+include("backend/opengl/opengl_ssr.jl")           # SSRPass
+include("backend/opengl/opengl_taa.jl")           # TAAPass
+include("backend/opengl/opengl_pbr.jl")           # PBR shaders, upload_lights!
+include("backend/opengl/opengl_postprocess.jl")   # PostProcessPipeline
+include("backend/opengl/opengl_deferred.jl")      # DeferredPipeline
+include("backend/opengl.jl")                      # OpenGLBackend, render_frame!
+
+# Metal backend implementation (macOS only)
+if Sys.isapple()
+    include("backend/metal/metal_types.jl")
+    include("backend/metal/metal_ffi.jl")
+    include("backend/metal/metal_uniforms.jl")
+    include("backend/metal/metal_mesh.jl")
+    include("backend/metal/metal_texture.jl")
+    include("backend/metal/metal_shader.jl")
+    include("backend/metal/metal_pbr.jl")
+    include("backend/metal/metal_framebuffer.jl")
+    include("backend/metal/metal_shadows.jl")
+    include("backend/metal/metal_ibl.jl")
+    include("backend/metal/metal_ssao.jl")
+    include("backend/metal/metal_ssr.jl")
+    include("backend/metal/metal_taa.jl")
+    include("backend/metal/metal_postprocess.jl")
+    include("backend/metal/metal_deferred.jl")
+    include("backend/metal/metal_backend.jl")
+end
+
+# Shared rendering orchestration (after backend — uses ECS + frustum culling)
+include("rendering/frame_preparation.jl")
 
 # Rendering pipeline (after backend — uses backend types)
 include("rendering/pipeline.jl")
@@ -166,9 +206,40 @@ export TAAPass, create_taa_pass!, destroy_taa_pass!, resize_taa_pass!, render_ta
 # Export IBL
 export IBLEnvironment, create_ibl_environment!, destroy_ibl_environment!
 
+# Export GPU Abstraction Types
+export AbstractShaderProgram, AbstractGPUMesh, AbstractGPUTexture
+export AbstractFramebuffer, AbstractGBuffer
+export AbstractShadowMap, AbstractCascadedShadowMap
+export AbstractIBLEnvironment
+export AbstractSSRPass, AbstractSSAOPass, AbstractTAAPass
+export AbstractPostProcessPipeline, AbstractDeferredPipeline
+export AbstractGPUResourceCache, AbstractTextureCache
+export get_index_count, get_width, get_height
+
 # Export Backend
 export AbstractBackend, initialize!, shutdown!, render_frame!
 export OpenGLBackend
+if Sys.isapple()
+    export MetalBackend
+end
+
+# Export Abstract Backend Methods
+export backend_create_shader, backend_destroy_shader!, backend_use_shader!, backend_set_uniform!
+export backend_upload_mesh!, backend_draw_mesh!, backend_destroy_mesh!
+export backend_upload_texture!, backend_bind_texture!, backend_destroy_texture!
+export backend_create_framebuffer!, backend_bind_framebuffer!, backend_unbind_framebuffer!, backend_destroy_framebuffer!
+export backend_create_gbuffer!, backend_create_shadow_map!, backend_create_csm!
+export backend_create_ibl_environment!
+export backend_create_ssr_pass!, backend_create_ssao_pass!, backend_create_taa_pass!
+export backend_create_post_process!
+export backend_set_viewport!, backend_clear!, backend_set_depth_test!, backend_set_blend!
+export backend_set_cull_face!, backend_swap_buffers!, backend_draw_fullscreen_quad!, backend_blit_framebuffer!
+export backend_should_close, backend_poll_events!, backend_get_time
+export backend_capture_cursor!, backend_release_cursor!, backend_is_key_pressed, backend_get_input
+
+# Export Frame Preparation
+export FrameLightData, EntityRenderData, TransparentEntityData, FrameData
+export collect_lights, prepare_frame
 
 # Export Rendering
 export RenderPipeline, execute!

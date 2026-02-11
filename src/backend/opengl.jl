@@ -121,6 +121,266 @@ function shutdown!(backend::OpenGLBackend)
     return nothing
 end
 
+# ==================================================================
+# Abstract Backend Method Implementations
+# ==================================================================
+
+# ---- Shader operations ----
+
+function backend_create_shader(backend::OpenGLBackend, vertex_src::String, fragment_src::String)
+    return create_shader_program(vertex_src, fragment_src)
+end
+
+function backend_destroy_shader!(backend::OpenGLBackend, shader::ShaderProgram)
+    destroy_shader_program!(shader)
+    return nothing
+end
+
+function backend_use_shader!(backend::OpenGLBackend, shader::ShaderProgram)
+    glUseProgram(shader.id)
+    return nothing
+end
+
+function backend_set_uniform!(backend::OpenGLBackend, shader::ShaderProgram, name::String, value)
+    set_uniform!(shader, name, value)
+    return nothing
+end
+
+# ---- Mesh operations ----
+
+function backend_upload_mesh!(backend::OpenGLBackend, entity_id, mesh)
+    return upload_mesh!(backend.gpu_cache, entity_id, mesh)
+end
+
+function backend_draw_mesh!(backend::OpenGLBackend, gpu_mesh::GPUMesh)
+    glBindVertexArray(gpu_mesh.vao)
+    glDrawElements(GL_TRIANGLES, gpu_mesh.index_count, GL_UNSIGNED_INT, C_NULL)
+    glBindVertexArray(GLuint(0))
+    return nothing
+end
+
+function backend_destroy_mesh!(backend::OpenGLBackend, gpu_mesh::GPUMesh)
+    destroy_gpu_mesh!(gpu_mesh)
+    return nothing
+end
+
+# ---- Texture operations ----
+
+function backend_upload_texture!(backend::OpenGLBackend, pixels::Vector{UInt8}, width::Int, height::Int, channels::Int)
+    return upload_texture_to_gpu(pixels, width, height, channels)
+end
+
+function backend_bind_texture!(backend::OpenGLBackend, texture::GPUTexture, unit::Int)
+    glActiveTexture(GL_TEXTURE0 + UInt32(unit))
+    glBindTexture(GL_TEXTURE_2D, texture.id)
+    return nothing
+end
+
+function backend_destroy_texture!(backend::OpenGLBackend, texture::GPUTexture)
+    destroy_texture!(texture)
+    return nothing
+end
+
+# ---- Framebuffer operations ----
+
+function backend_create_framebuffer!(backend::OpenGLBackend, width::Int, height::Int)
+    fb = Framebuffer(width=width, height=height)
+    create_framebuffer!(fb, width, height)
+    return fb
+end
+
+function backend_bind_framebuffer!(backend::OpenGLBackend, fb::Framebuffer)
+    glBindFramebuffer(GL_FRAMEBUFFER, fb.fbo)
+    return nothing
+end
+
+function backend_unbind_framebuffer!(backend::OpenGLBackend)
+    unbind_framebuffer!()
+    return nothing
+end
+
+function backend_destroy_framebuffer!(backend::OpenGLBackend, fb::Framebuffer)
+    destroy_framebuffer!(fb)
+    return nothing
+end
+
+# ---- G-Buffer operations ----
+
+function backend_create_gbuffer!(backend::OpenGLBackend, width::Int, height::Int)
+    gb = GBuffer(width=width, height=height)
+    create_gbuffer!(gb, width, height)
+    return gb
+end
+
+# ---- Shadow map operations ----
+
+function backend_create_shadow_map!(backend::OpenGLBackend, width::Int, height::Int)
+    sm = ShadowMap(width=width, height=height)
+    create_shadow_map!(sm)
+    return sm
+end
+
+function backend_create_csm!(backend::OpenGLBackend, num_cascades::Int, resolution::Int, near::Float32, far::Float32)
+    csm = CascadedShadowMap(num_cascades=num_cascades, resolution=resolution)
+    create_csm!(csm, near, far)
+    return csm
+end
+
+# ---- IBL operations ----
+
+function backend_create_ibl_environment!(backend::OpenGLBackend, path::String, intensity::Float32)
+    env = IBLEnvironment(intensity=intensity)
+    create_ibl_environment!(env, path)
+    return env
+end
+
+# ---- Screen-space effect operations ----
+
+function backend_create_ssr_pass!(backend::OpenGLBackend, width::Int, height::Int)
+    ssr = SSRPass(width=width, height=height)
+    create_ssr_pass!(ssr, width, height)
+    return ssr
+end
+
+function backend_create_ssao_pass!(backend::OpenGLBackend, width::Int, height::Int)
+    ssao = SSAOPass(width=width, height=height)
+    create_ssao_pass!(ssao, width, height)
+    return ssao
+end
+
+function backend_create_taa_pass!(backend::OpenGLBackend, width::Int, height::Int)
+    return create_taa_pass!(width, height)
+end
+
+# ---- Post-processing operations ----
+
+function backend_create_post_process!(backend::OpenGLBackend, width::Int, height::Int, config)
+    pp = PostProcessPipeline(config=config)
+    create_post_process_pipeline!(pp, width, height)
+    return pp
+end
+
+# ---- Render state operations ----
+
+function backend_set_viewport!(backend::OpenGLBackend, x::Int, y::Int, width::Int, height::Int)
+    glViewport(x, y, width, height)
+    return nothing
+end
+
+function backend_clear!(backend::OpenGLBackend; color::Bool=true, depth::Bool=true)
+    mask = GLbitfield(0)
+    if color
+        mask |= GL_COLOR_BUFFER_BIT
+    end
+    if depth
+        mask |= GL_DEPTH_BUFFER_BIT
+    end
+    if mask != 0
+        glClear(mask)
+    end
+    return nothing
+end
+
+function backend_set_depth_test!(backend::OpenGLBackend; enabled::Bool=true, write::Bool=true)
+    if enabled
+        glEnable(GL_DEPTH_TEST)
+    else
+        glDisable(GL_DEPTH_TEST)
+    end
+    glDepthMask(write ? GL_TRUE : GL_FALSE)
+    return nothing
+end
+
+function backend_set_blend!(backend::OpenGLBackend; enabled::Bool=false)
+    if enabled
+        glEnable(GL_BLEND)
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+    else
+        glDisable(GL_BLEND)
+    end
+    return nothing
+end
+
+function backend_set_cull_face!(backend::OpenGLBackend; enabled::Bool=true, front::Bool=false)
+    if enabled
+        glEnable(GL_CULL_FACE)
+        glCullFace(front ? GL_FRONT : GL_BACK)
+    else
+        glDisable(GL_CULL_FACE)
+    end
+    return nothing
+end
+
+function backend_swap_buffers!(backend::OpenGLBackend)
+    if backend.window !== nothing
+        swap_buffers!(backend.window)
+    end
+    return nothing
+end
+
+function backend_draw_fullscreen_quad!(backend::OpenGLBackend, quad_vao)
+    glBindVertexArray(GLuint(quad_vao))
+    glDrawArrays(GL_TRIANGLES, 0, 6)
+    glBindVertexArray(GLuint(0))
+    return nothing
+end
+
+function backend_blit_framebuffer!(backend::OpenGLBackend, src, dst, width::Int, height::Int;
+                                    color::Bool=false, depth::Bool=false)
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, GLuint(src))
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, GLuint(dst))
+    mask = GLbitfield(0)
+    if color
+        mask |= GL_COLOR_BUFFER_BIT
+    end
+    if depth
+        mask |= GL_DEPTH_BUFFER_BIT
+    end
+    if mask != 0
+        glBlitFramebuffer(0, 0, width, height, 0, 0, width, height, mask, GL_NEAREST)
+    end
+    glBindFramebuffer(GL_FRAMEBUFFER, GLuint(0))
+    return nothing
+end
+
+# ---- Windowing / event loop operations ----
+
+function backend_should_close(backend::OpenGLBackend)
+    backend.window === nothing && return true
+    return should_close(backend.window)
+end
+
+function backend_poll_events!(backend::OpenGLBackend)
+    poll_events!()
+    return nothing
+end
+
+function backend_get_time(::OpenGLBackend)
+    return get_time()
+end
+
+function backend_capture_cursor!(backend::OpenGLBackend)
+    backend.window !== nothing && capture_cursor!(backend.window)
+    return nothing
+end
+
+function backend_release_cursor!(backend::OpenGLBackend)
+    backend.window !== nothing && release_cursor!(backend.window)
+    return nothing
+end
+
+function backend_is_key_pressed(backend::OpenGLBackend, key)
+    return is_key_pressed(backend.input, key)
+end
+
+function backend_get_input(backend::OpenGLBackend)
+    return backend.input
+end
+
+# ==================================================================
+# Rendering Helpers
+# ==================================================================
+
 """
     bind_material_textures!(sp, material, texture_cache)
 

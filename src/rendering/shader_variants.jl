@@ -33,48 +33,59 @@ Base.hash(key::ShaderVariantKey, h::UInt) = hash(key.features, h)
 Base.:(==)(a::ShaderVariantKey, b::ShaderVariantKey) = a.features == b.features
 
 """
-    ShaderLibrary
+    ShaderLibrary{S <: AbstractShaderProgram}
 
 Manages shader variants with lazy compilation.
 Stores template shaders and compiles variants on-demand based on feature sets.
+Parametric on the shader program type to support multiple backends.
 """
-mutable struct ShaderLibrary
-    variants::Dict{ShaderVariantKey, ShaderProgram}
+mutable struct ShaderLibrary{S <: AbstractShaderProgram}
+    variants::Dict{ShaderVariantKey, S}
     template_vertex::String
     template_fragment::String
     shader_name::String  # For debugging
+    compile_fn::Function  # (vertex_src::String, fragment_src::String) -> S
 
-    ShaderLibrary(name::String, vertex_template::String, fragment_template::String) =
-        new(Dict{ShaderVariantKey, ShaderProgram}(), vertex_template, fragment_template, name)
+    ShaderLibrary{S}(name::String, vertex_template::String, fragment_template::String,
+                     compile_fn::Function) where S =
+        new{S}(Dict{ShaderVariantKey, S}(), vertex_template, fragment_template, name, compile_fn)
 end
 
 """
     _insert_defines_after_version(source::String, define_block::String) -> String
 
-Insert `#define` directives after the `#version` line in GLSL source.
+Insert `#define` directives after the `#version` line in GLSL source,
+or prepend them for MSL sources (which have no `#version` line).
 GLSL requires `#version` to be the very first line, so defines must come after it.
+MSL has no such restriction — defines are prepended at the top.
 """
 function _insert_defines_after_version(source::String, define_block::String)::String
     if isempty(define_block)
         return source
     end
-    # Find the end of the first line (#version ...)
-    newline_pos = findfirst('\n', source)
-    if newline_pos === nothing
-        # No newline — single-line source, just append
-        return source * "\n" * define_block * "\n"
+
+    # Detect MSL vs GLSL: MSL sources typically start with #include <metal_stdlib>
+    # or lack a #version directive. Check if the first non-empty line is #version.
+    first_line_end = findfirst('\n', source)
+    first_line = first_line_end === nothing ? source : source[1:first_line_end-1]
+
+    if startswith(strip(first_line), "#version")
+        # GLSL: insert defines after the #version line
+        version_line = source[1:first_line_end]  # includes the '\n'
+        rest = source[first_line_end+1:end]
+        return version_line * define_block * "\n" * rest
+    else
+        # MSL (or other): prepend defines at the top
+        return define_block * "\n" * source
     end
-    version_line = source[1:newline_pos]  # includes the '\n'
-    rest = source[newline_pos+1:end]
-    return version_line * define_block * "\n" * rest
 end
 
 """
-    get_or_compile_variant!(lib::ShaderLibrary, key::ShaderVariantKey) -> ShaderProgram
+    get_or_compile_variant!(lib::ShaderLibrary{S}, key::ShaderVariantKey) -> S
 
 Get a cached shader variant or compile a new one if it doesn't exist.
 """
-function get_or_compile_variant!(lib::ShaderLibrary, key::ShaderVariantKey)::ShaderProgram
+function get_or_compile_variant!(lib::ShaderLibrary{S}, key::ShaderVariantKey)::S where S
     # Check cache
     if haskey(lib.variants, key)
         return lib.variants[key]
@@ -91,9 +102,9 @@ function get_or_compile_variant!(lib::ShaderLibrary, key::ShaderVariantKey)::Sha
     vertex_src = _insert_defines_after_version(lib.template_vertex, define_block)
     fragment_src = _insert_defines_after_version(lib.template_fragment, define_block)
 
-    # Compile shader
+    # Compile shader using the backend-specific compile function
     try
-        program = create_shader_program(vertex_src, fragment_src)
+        program = lib.compile_fn(vertex_src, fragment_src)
         lib.variants[key] = program
 
         # Debug info
