@@ -17,6 +17,8 @@ ModernGL = "66fc600b-dfda-50eb-8b99-91cfa97b1301"
 Observables = "510215fc-4207-5dde-b226-833fc4488ee2"
 Quaternions = "94ee1d12-ae83-5a48-8b1c-48b8ff168ae0"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+Vulkan = "9f14b124-c50e-4008-a7d4-969b3a6cd68a"
+glslang_jll = "6fd5517d-459c-5c5a-9b1a-c968b4e37a81"
 
 [compat]
 Base64 = "1.11.0"

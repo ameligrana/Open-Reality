@@ -119,6 +119,29 @@ if Sys.isapple()
     include("backend/metal/metal_backend.jl")
 end
 
+# Vulkan backend implementation (Linux/Windows, after frame_preparation — uses FrameLightData)
+if !Sys.isapple()
+    include("backend/vulkan/vulkan_types.jl")
+    include("backend/vulkan/vulkan_memory.jl")
+    include("backend/vulkan/vulkan_device.jl")
+    include("backend/vulkan/vulkan_swapchain.jl")
+    include("backend/vulkan/vulkan_descriptors.jl")
+    include("backend/vulkan/vulkan_uniforms.jl")
+    include("backend/vulkan/vulkan_shader.jl")
+    include("backend/vulkan/vulkan_mesh.jl")
+    include("backend/vulkan/vulkan_texture.jl")
+    include("backend/vulkan/vulkan_framebuffer.jl")
+    include("backend/vulkan/vulkan_pbr.jl")
+    include("backend/vulkan/vulkan_shadows.jl")
+    include("backend/vulkan/vulkan_ibl.jl")
+    include("backend/vulkan/vulkan_ssao.jl")
+    include("backend/vulkan/vulkan_ssr.jl")
+    include("backend/vulkan/vulkan_taa.jl")
+    include("backend/vulkan/vulkan_postprocess.jl")
+    include("backend/vulkan/vulkan_deferred.jl")
+    include("backend/vulkan/vulkan_backend.jl")
+end
+
 # Rendering pipeline (after backend — uses backend types)
 include("rendering/pipeline.jl")
 include("rendering/systems.jl")
@@ -222,6 +245,9 @@ export OpenGLBackend
 if Sys.isapple()
     export MetalBackend
 end
+if !Sys.isapple()
+    export VulkanBackend
+end
 
 # Export Abstract Backend Methods
 export backend_create_shader, backend_destroy_shader!, backend_use_shader!, backend_set_uniform!
@@ -274,6 +300,7 @@ Start the PBR render loop for the given scene.
 Opens a window and renders until closed.
 
 Pass `backend=MetalBackend()` on macOS to use the Metal renderer.
+Pass `backend=VulkanBackend()` on Linux/Windows to use the Vulkan renderer.
 """
 function render(scene::Scene;
                 backend::AbstractBackend = OpenGLBackend(),
