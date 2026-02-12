@@ -47,13 +47,29 @@ const SHADOW_VERTEX_SHADER = """
 #version 330 core
 
 layout(location = 0) in vec3 a_Position;
+layout(location = 3) in vec4 a_BoneWeights;
+layout(location = 4) in uvec4 a_BoneIndices;
+
+#define MAX_BONES 128
+uniform mat4 u_BoneMatrices[MAX_BONES];
+uniform int u_HasSkinning;
 
 uniform mat4 u_LightSpaceMatrix;
 uniform mat4 u_Model;
 
 void main()
 {
-    gl_Position = u_LightSpaceMatrix * u_Model * vec4(a_Position, 1.0);
+    vec3 localPos = a_Position;
+
+    if (u_HasSkinning == 1) {
+        mat4 skin = u_BoneMatrices[a_BoneIndices.x] * a_BoneWeights.x
+                  + u_BoneMatrices[a_BoneIndices.y] * a_BoneWeights.y
+                  + u_BoneMatrices[a_BoneIndices.z] * a_BoneWeights.z
+                  + u_BoneMatrices[a_BoneIndices.w] * a_BoneWeights.w;
+        localPos = (skin * vec4(a_Position, 1.0)).xyz;
+    }
+
+    gl_Position = u_LightSpaceMatrix * u_Model * vec4(localPos, 1.0);
 }
 """
 

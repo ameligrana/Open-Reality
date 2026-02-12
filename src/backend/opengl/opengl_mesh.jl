@@ -11,9 +11,13 @@ mutable struct GPUMesh <: AbstractGPUMesh
     nbo::GLuint     # normals
     ubo::GLuint     # UV coordinates
     ebo::GLuint     # element (index) buffer
+    wbo::GLuint     # bone weights (layout 3)
+    ibo_bones::GLuint  # bone indices (layout 4)
     index_count::Int32
+    has_skinning::Bool
 
-    GPUMesh() = new(GLuint(0), GLuint(0), GLuint(0), GLuint(0), GLuint(0), Int32(0))
+    GPUMesh() = new(GLuint(0), GLuint(0), GLuint(0), GLuint(0), GLuint(0),
+                    GLuint(0), GLuint(0), Int32(0), false)
 end
 
 get_index_count(mesh::GPUMesh) = mesh.index_count
@@ -77,6 +81,39 @@ function upload_mesh!(cache::GPUResourceCache, entity_id::EntityID, mesh::MeshCo
         glEnableVertexAttribArray(2)
     end
 
+    # Bone weights (layout = 3) — vec4 per vertex
+    if !isempty(mesh.bone_weights) && !isempty(mesh.bone_indices)
+        wbo_ref = Ref(GLuint(0))
+        glGenBuffers(1, wbo_ref)
+        gpu.wbo = wbo_ref[]
+        glBindBuffer(GL_ARRAY_BUFFER, gpu.wbo)
+        glBufferData(GL_ARRAY_BUFFER, sizeof(mesh.bone_weights), mesh.bone_weights, GL_STATIC_DRAW)
+        glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, 0, C_NULL)
+        glEnableVertexAttribArray(3)
+
+        # Bone indices (layout = 4) — 4 x UInt16 per vertex, uploaded as integer attribute
+        # Pack NTuple{4, UInt16} into a flat UInt16 array for GL upload
+        n_verts = length(mesh.bone_indices)
+        bone_idx_flat = Vector{UInt16}(undef, n_verts * 4)
+        for i in 1:n_verts
+            bi = mesh.bone_indices[i]
+            bone_idx_flat[(i-1)*4 + 1] = bi[1]
+            bone_idx_flat[(i-1)*4 + 2] = bi[2]
+            bone_idx_flat[(i-1)*4 + 3] = bi[3]
+            bone_idx_flat[(i-1)*4 + 4] = bi[4]
+        end
+
+        ibo_ref = Ref(GLuint(0))
+        glGenBuffers(1, ibo_ref)
+        gpu.ibo_bones = ibo_ref[]
+        glBindBuffer(GL_ARRAY_BUFFER, gpu.ibo_bones)
+        glBufferData(GL_ARRAY_BUFFER, sizeof(bone_idx_flat), bone_idx_flat, GL_STATIC_DRAW)
+        glVertexAttribIPointer(4, 4, GL_UNSIGNED_SHORT, 0, C_NULL)
+        glEnableVertexAttribArray(4)
+
+        gpu.has_skinning = true
+    end
+
     # Index buffer
     ebo_ref = Ref(GLuint(0))
     glGenBuffers(1, ebo_ref)
@@ -113,6 +150,12 @@ function destroy_gpu_mesh!(gpu::GPUMesh)
     if gpu.ubo != GLuint(0)
         push!(bufs, gpu.ubo)
     end
+    if gpu.wbo != GLuint(0)
+        push!(bufs, gpu.wbo)
+    end
+    if gpu.ibo_bones != GLuint(0)
+        push!(bufs, gpu.ibo_bones)
+    end
     glDeleteBuffers(length(bufs), bufs)
     vaos = GLuint[gpu.vao]
     glDeleteVertexArrays(1, vaos)
@@ -121,6 +164,9 @@ function destroy_gpu_mesh!(gpu::GPUMesh)
     gpu.nbo = GLuint(0)
     gpu.ubo = GLuint(0)
     gpu.ebo = GLuint(0)
+    gpu.wbo = GLuint(0)
+    gpu.ibo_bones = GLuint(0)
+    gpu.has_skinning = false
 end
 
 """

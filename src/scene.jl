@@ -180,6 +180,10 @@ function scene(entity_defs::Vector)::Scene
     # s.entities is in DFS creation order, so the mapping is direct.
     _remap_animation_targets!(s.entities)
 
+    # Apply deferred skin components from glTF loading.
+    # These need entity ID remapping just like animations.
+    _apply_deferred_skin_components!(entity_defs, s.entities)
+
     return s
 end
 
@@ -232,6 +236,8 @@ function add_entity_from_def(scene::Scene, entity_def::EntityDef, parent::Union{
             end
             add_component!(entity_id, component)
         end
+        # Deferred components from glTF skin loading are collected for post-processing
+        # (handled by _apply_deferred_skin_components! after scene creation)
     end
 
     # Add entity to scene
@@ -291,6 +297,56 @@ function _remap_animation_targets!(entity_ids::Vector{EntityID})
 
         if changed
             anim.clips = new_clips
+        end
+    end
+
+    return nothing
+end
+
+# =============================================================================
+# Deferred Skin Component Application
+# =============================================================================
+
+"""
+    _apply_deferred_skin_components!(entity_defs, real_entity_ids)
+
+Process _DeferredComponent items in entity definition components.
+These are created by the glTF loader for SkinnedMeshComponent instances that
+need entity ID remapping (bone_entities use placeholder DFS indices).
+"""
+function _apply_deferred_skin_components!(entity_defs::Vector, real_entity_ids::Vector{EntityID})
+    isempty(real_entity_ids) && return nothing
+
+    for entity_def in entity_defs
+        !(entity_def isa NamedTuple) && continue
+        !hasproperty(entity_def, :components) && continue
+
+        for comp in entity_def.components
+            # Check for _DeferredComponent type (from gltf_loader.jl)
+            if hasproperty(comp, :target_entity) && hasproperty(comp, :component) && !(comp isa Component)
+                placeholder_idx = Int(comp.target_entity)
+                if placeholder_idx >= 1 && placeholder_idx <= length(real_entity_ids)
+                    real_target = real_entity_ids[placeholder_idx]
+                    skin_comp = comp.component
+
+                    # Remap bone_entities from placeholder indices to real IDs
+                    if hasproperty(skin_comp, :bone_entities)
+                        remapped_bones = EntityID[]
+                        for bone_placeholder in skin_comp.bone_entities
+                            bone_idx = Int(bone_placeholder)
+                            if bone_idx >= 1 && bone_idx <= length(real_entity_ids)
+                                push!(remapped_bones, real_entity_ids[bone_idx])
+                            end
+                        end
+                        skin_comp.bone_entities = remapped_bones
+                        if length(skin_comp.bone_matrices) != length(remapped_bones)
+                            skin_comp.bone_matrices = fill(Mat4f(I), length(remapped_bones))
+                        end
+                    end
+
+                    add_component!(real_target, skin_comp)
+                end
+            end
         end
     end
 

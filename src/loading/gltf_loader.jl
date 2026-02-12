@@ -1,5 +1,16 @@
 # glTF 2.0 model loader
 
+# Helper struct for deferred skin resolution during glTF loading
+struct _DeferredSkin
+    joint_node_indices::Vector{Int}
+end
+
+# Helper struct for deferred component addition (after scene construction)
+struct _DeferredComponent
+    target_entity::EntityID
+    component::Component
+end
+
 """
     load_gltf(path::String; base_dir::String = dirname(path)) -> Vector{EntityDef}
 
@@ -46,10 +57,63 @@ function load_gltf(path::String; base_dir::String = dirname(abspath(path)))
     # Find root nodes from the default scene, or by exclusion
     root_node_indices = _find_gltf_root_nodes(gltf)
 
+    # Pre-compute skin data: which nodes are joints, their inverse bind matrices
+    joint_bone_data = Dict{Int, Tuple{Mat4f, Int, String}}()  # joint_node_idx → (ibm, bone_index, name)
+    skin_joint_lists = Dict{Int, Vector{Int}}()  # skin_idx → [joint_node_indices]
+    node_skin_map = Dict{Int, Int}()  # node_idx → skin_idx (for nodes that reference a skin)
+
+    if gltf.skins !== nothing && !isempty(gltf.skins)
+        for (si, skin) in enumerate(gltf.skins)
+            skin_idx = si - 1
+            joints = skin.joints
+            joints === nothing && continue
+            isempty(joints) && continue
+
+            # Read inverse bind matrices
+            ibms = Mat4f[]
+            if skin.inverseBindMatrices !== nothing
+                ibm_data = _read_accessor_data(gltf, skin.inverseBindMatrices, buffers_data)
+                for i in 1:16:length(ibm_data)
+                    i + 15 > length(ibm_data) && break
+                    m = Mat4f(
+                        ibm_data[i],    ibm_data[i+1],  ibm_data[i+2],  ibm_data[i+3],
+                        ibm_data[i+4],  ibm_data[i+5],  ibm_data[i+6],  ibm_data[i+7],
+                        ibm_data[i+8],  ibm_data[i+9],  ibm_data[i+10], ibm_data[i+11],
+                        ibm_data[i+12], ibm_data[i+13], ibm_data[i+14], ibm_data[i+15]
+                    )
+                    push!(ibms, m)
+                end
+            end
+
+            joint_indices = Int[]
+            for (idx, jni) in enumerate(joints)
+                joint_node_idx = Int(jni)
+                push!(joint_indices, joint_node_idx)
+                ibm = idx <= length(ibms) ? ibms[idx] : Mat4f(I)
+                node = gltf.nodes[joint_node_idx]
+                bone_name = (hasproperty(node, :name) && node.name !== nothing) ? node.name : "bone_$idx"
+                joint_bone_data[joint_node_idx] = (ibm, idx - 1, bone_name)
+            end
+            skin_joint_lists[skin_idx] = joint_indices
+        end
+
+        # Map nodes to their skin reference
+        if gltf.nodes !== nothing
+            for (ni, node) in enumerate(gltf.nodes)
+                if hasproperty(node, :skin) && node.skin !== nothing
+                    node_skin_map[ni - 1] = Int(node.skin)
+                end
+            end
+        end
+    end
+
     # Build node EntityDefs with DFS position tracking for animation remapping.
     # The DFS counter tracks the 1-based position each entity will occupy when
     # scene() flattens the hierarchy via add_entity_from_def.
     dfs_counter = Ref(0)
+
+    # Deferred skin components: added after scene construction via add_component!
+    deferred_skin_components = Tuple{EntityID, Component}[]
 
     function _build_node_entity(node_idx::Int)::EntityDef
         node = gltf.nodes[node_idx]  # ZVector is already 0-indexed
@@ -59,12 +123,36 @@ function load_gltf(path::String; base_dir::String = dirname(abspath(path)))
         node_to_entity[node_idx] = EntityID(dfs_counter[])
 
         tc = _extract_node_transform(node)
+        node_components = Any[tc]
         children = Any[]
+
+        # If this node is a joint, add BoneComponent
+        if haskey(joint_bone_data, node_idx)
+            ibm, bone_idx, bone_name = joint_bone_data[node_idx]
+            push!(node_components, BoneComponent(
+                inverse_bind_matrix=ibm,
+                bone_index=bone_idx,
+                name=bone_name
+            ))
+        end
 
         # Mesh primitives become child entities under this node's transform
         if node.mesh !== nothing && haskey(mesh_primitives, node.mesh)
+            # Check if this node references a skin
+            has_skin = haskey(node_skin_map, node_idx)
+            skin_idx = has_skin ? node_skin_map[node_idx] : -1
+
             for (mc, matc) in mesh_primitives[node.mesh]
                 dfs_counter[] += 1
+                mesh_eid = EntityID(dfs_counter[])
+
+                # If skin is present, create SkinnedMeshComponent for deferred addition
+                if has_skin && haskey(skin_joint_lists, skin_idx)
+                    joint_node_indices = skin_joint_lists[skin_idx]
+                    # bone_entities will be resolved after all nodes are built
+                    push!(deferred_skin_components, (mesh_eid, _DeferredSkin(joint_node_indices)))
+                end
+
                 push!(children, entity([mc, matc, transform()]))
             end
         end
@@ -76,11 +164,31 @@ function load_gltf(path::String; base_dir::String = dirname(abspath(path)))
             end
         end
 
-        return entity([tc]; children=children)
+        return entity(node_components; children=children)
     end
 
     for root_idx in root_node_indices
         push!(entities_out, _build_node_entity(root_idx))
+    end
+
+    # Resolve deferred skin components (now that node_to_entity is fully populated)
+    if !isempty(deferred_skin_components) && !isempty(entities_out)
+        for (mesh_eid, deferred) in deferred_skin_components
+            bone_entities = EntityID[]
+            for jni in deferred.joint_node_indices
+                if haskey(node_to_entity, jni)
+                    push!(bone_entities, node_to_entity[jni])
+                end
+            end
+            if !isempty(bone_entities)
+                skin_comp = SkinnedMeshComponent(
+                    bone_entities=bone_entities,
+                    bone_matrices=fill(Mat4f(I), length(bone_entities))
+                )
+                # Store as a deferred add_component! call (entity_id, component)
+                push!(entities_out[1].components, _DeferredComponent(mesh_eid, skin_comp))
+            end
+        end
     end
 
     # Extract animations if present
@@ -390,12 +498,34 @@ function _extract_gltf_mesh(gltf::GLTFLib.Object, prim::GLTFLib.Primitive, buffe
         indices = _generate_fallback_indices(length(positions), prim_mode)
     end
 
+    # Bone weights (WEIGHTS_0) — vec4 per vertex
+    bone_weights = Vec4f[]
+    if haskey(prim.attributes, "WEIGHTS_0")
+        w_data = _read_accessor_data(gltf, prim.attributes["WEIGHTS_0"], buffers_data)
+        for i in 1:4:length(w_data)
+            i + 3 > length(w_data) && break
+            push!(bone_weights, Vec4f(w_data[i], w_data[i+1], w_data[i+2], w_data[i+3]))
+        end
+    end
+
+    # Bone indices (JOINTS_0) — 4 joint indices per vertex
+    bone_indices = BoneIndices4[]
+    if haskey(prim.attributes, "JOINTS_0")
+        j_data = _read_accessor_data(gltf, prim.attributes["JOINTS_0"], buffers_data)
+        for i in 1:4:length(j_data)
+            i + 3 > length(j_data) && break
+            push!(bone_indices, (UInt16(j_data[i]), UInt16(j_data[i+1]),
+                                 UInt16(j_data[i+2]), UInt16(j_data[i+3])))
+        end
+    end
+
     # Compute normals if not provided
     if isempty(normals) && !isempty(positions) && !isempty(indices)
         normals = _compute_averaged_normals(positions, indices)
     end
 
-    return MeshComponent(vertices=positions, indices=indices, normals=normals, uvs=uvs)
+    return MeshComponent(vertices=positions, indices=indices, normals=normals, uvs=uvs,
+                         bone_weights=bone_weights, bone_indices=bone_indices)
 end
 
 # ---- Material extraction ----

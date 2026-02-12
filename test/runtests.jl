@@ -1,6 +1,7 @@
 using OpenReality
 using Test
 using LinearAlgebra
+using StaticArrays
 
 @testset "OpenReality.jl" begin
     @testset "Module loads" begin
@@ -2162,5 +2163,891 @@ using LinearAlgebra
         input = InputState()
         @test !is_key_pressed(input, 65)  # 'A' key
         @test get_mouse_position(input) == (0.0, 0.0)
+    end
+
+    @testset "Audio" begin
+        @testset "AudioListenerComponent defaults" begin
+            listener = AudioListenerComponent()
+            @test listener.gain == 1.0f0
+        end
+
+        @testset "AudioListenerComponent custom" begin
+            listener = AudioListenerComponent(gain=0.5f0)
+            @test listener.gain == 0.5f0
+        end
+
+        @testset "AudioSourceComponent defaults" begin
+            source = AudioSourceComponent()
+            @test source.audio_path == ""
+            @test source.playing == false
+            @test source.looping == false
+            @test source.gain == 1.0f0
+            @test source.pitch == 1.0f0
+            @test source.spatial == true
+            @test source.reference_distance == 1.0f0
+            @test source.max_distance == 100.0f0
+            @test source.rolloff_factor == 1.0f0
+        end
+
+        @testset "AudioSourceComponent custom" begin
+            source = AudioSourceComponent(
+                audio_path="music.wav",
+                playing=true,
+                looping=true,
+                gain=0.8f0,
+                pitch=1.2f0,
+                spatial=false,
+                reference_distance=2.0f0,
+                max_distance=50.0f0,
+                rolloff_factor=0.5f0
+            )
+            @test source.audio_path == "music.wav"
+            @test source.playing == true
+            @test source.looping == true
+            @test source.gain == 0.8f0
+            @test source.pitch == 1.2f0
+            @test source.spatial == false
+            @test source.reference_distance == 2.0f0
+            @test source.max_distance == 50.0f0
+            @test source.rolloff_factor == 0.5f0
+        end
+
+        @testset "AudioSourceComponent is mutable" begin
+            source = AudioSourceComponent(audio_path="test.wav")
+            source.playing = true
+            @test source.playing == true
+            source.gain = 0.3f0
+            @test source.gain == 0.3f0
+        end
+
+        @testset "Audio components in ECS" begin
+            reset_component_stores!()
+            reset_entity_counter!()
+
+            e1 = create_entity_id()
+            add_component!(e1, AudioListenerComponent(gain=0.9f0))
+            add_component!(e1, transform())
+
+            e2 = create_entity_id()
+            add_component!(e2, AudioSourceComponent(audio_path="sfx.wav", playing=true))
+            add_component!(e2, transform(position=Vec3d(5, 0, 0)))
+
+            @test has_component(e1, AudioListenerComponent)
+            @test has_component(e2, AudioSourceComponent)
+            @test get_component(e1, AudioListenerComponent).gain == 0.9f0
+            @test get_component(e2, AudioSourceComponent).audio_path == "sfx.wav"
+            @test get_component(e2, AudioSourceComponent).playing == true
+        end
+
+        @testset "AudioConfig defaults" begin
+            config = AudioConfig()
+            @test config.doppler_factor == 1.0f0
+            @test config.speed_of_sound == 343.3f0
+        end
+
+        @testset "Audio state management" begin
+            reset_audio_state!()
+            state = OpenReality.get_audio_state()
+            @test state.initialized == false
+            @test isempty(state.buffers)
+            @test isempty(state.sources)
+        end
+
+        @testset "WAV loader" begin
+            # Create a minimal valid WAV file in memory
+            wav_path = tempname() * ".wav"
+            # 44-byte header + 4 bytes of silence (mono 16-bit, 44100 Hz)
+            io = IOBuffer()
+            # RIFF header
+            write(io, b"RIFF")
+            write(io, UInt32(36 + 4))  # file size - 8
+            write(io, b"WAVE")
+            # fmt chunk
+            write(io, b"fmt ")
+            write(io, UInt32(16))      # chunk size
+            write(io, UInt16(1))       # PCM format
+            write(io, UInt16(1))       # mono
+            write(io, UInt32(44100))   # sample rate
+            write(io, UInt32(44100 * 2))  # byte rate
+            write(io, UInt16(2))       # block align
+            write(io, UInt16(16))      # bits per sample
+            # data chunk
+            write(io, b"data")
+            write(io, UInt32(4))       # data size
+            write(io, Int16(0))        # silence
+            write(io, Int16(0))        # silence
+
+            wav_data = take!(io)
+            Base.write(wav_path, wav_data)
+
+            pcm, format, sample_rate = load_wav(wav_path)
+            @test length(pcm) == 4
+            @test format == OpenReality.AL_FORMAT_MONO16
+            @test sample_rate == Int32(44100)
+
+            rm(wav_path)
+        end
+
+        @testset "WAV loader stereo" begin
+            wav_path = tempname() * ".wav"
+            io = IOBuffer()
+            write(io, b"RIFF")
+            write(io, UInt32(36 + 8))
+            write(io, b"WAVE")
+            write(io, b"fmt ")
+            write(io, UInt32(16))
+            write(io, UInt16(1))       # PCM
+            write(io, UInt16(2))       # stereo
+            write(io, UInt32(48000))
+            write(io, UInt32(48000 * 4))
+            write(io, UInt16(4))
+            write(io, UInt16(16))
+            write(io, b"data")
+            write(io, UInt32(8))
+            write(io, Int16(0))
+            write(io, Int16(0))
+            write(io, Int16(0))
+            write(io, Int16(0))
+
+            Base.write(wav_path, take!(io))
+
+            pcm, format, sample_rate = load_wav(wav_path)
+            @test length(pcm) == 8
+            @test format == OpenReality.AL_FORMAT_STEREO16
+            @test sample_rate == Int32(48000)
+
+            rm(wav_path)
+        end
+    end
+
+    @testset "UI System" begin
+        @testset "UIContext creation" begin
+            ctx = UIContext()
+            @test isempty(ctx.vertices)
+            @test isempty(ctx.draw_commands)
+            @test ctx.width == 1280
+            @test ctx.height == 720
+            @test ctx.mouse_x == 0.0
+            @test ctx.mouse_y == 0.0
+            @test ctx.mouse_clicked == false
+        end
+
+        @testset "orthographic_matrix" begin
+            proj = orthographic_matrix(0.0f0, 800.0f0, 600.0f0, 0.0f0, -1.0f0, 1.0f0)
+            @test proj isa Mat4f
+            # Top-left corner (0,0) should map to (-1,1) in NDC
+            clip = proj * SVector{4, Float32}(0, 0, 0, 1)
+            @test isapprox(clip[1] / clip[4], -1.0f0, atol=1e-5)
+            @test isapprox(clip[2] / clip[4], 1.0f0, atol=1e-5)
+            # Bottom-right corner (800,600) should map to (1,-1) in NDC
+            clip2 = proj * SVector{4, Float32}(800, 600, 0, 1)
+            @test isapprox(clip2[1] / clip2[4], 1.0f0, atol=1e-5)
+            @test isapprox(clip2[2] / clip2[4], -1.0f0, atol=1e-5)
+        end
+
+        @testset "clear_ui!" begin
+            ctx = UIContext()
+            push!(ctx.vertices, 1.0f0, 2.0f0)
+            push!(ctx.draw_commands, UIDrawCommand(0, 6, UInt32(0), false))
+            clear_ui!(ctx)
+            @test isempty(ctx.vertices)
+            @test isempty(ctx.draw_commands)
+        end
+
+        @testset "ui_rect generates vertices" begin
+            ctx = UIContext()
+            ui_rect(ctx, x=10, y=20, width=100, height=50,
+                    color=RGB{Float32}(1, 0, 0), alpha=0.5f0)
+            # 6 vertices * 8 floats = 48
+            @test length(ctx.vertices) == 48
+            @test length(ctx.draw_commands) == 1
+            @test ctx.draw_commands[1].vertex_count == 6
+            @test ctx.draw_commands[1].texture_id == UInt32(0)
+        end
+
+        @testset "ui_rect vertex positions" begin
+            ctx = UIContext()
+            ui_rect(ctx, x=10, y=20, width=100, height=50)
+            # First vertex: top-left (x=10, y=20)
+            @test ctx.vertices[1] == 10.0f0  # x
+            @test ctx.vertices[2] == 20.0f0  # y
+            # Third vertex: bottom-right (x=110, y=70)
+            @test ctx.vertices[17] == 110.0f0  # x (3rd vertex, offset 2*8+1)
+            @test ctx.vertices[18] == 70.0f0   # y
+        end
+
+        @testset "ui_progress_bar" begin
+            ctx = UIContext()
+            ui_progress_bar(ctx, 0.5, x=0, y=0, width=200, height=20)
+            # Should produce 2 rects (background + fill) = 12 vertices
+            @test length(ctx.vertices) == 96  # 12 * 8
+        end
+
+        @testset "ui_button hit test" begin
+            ctx = UIContext()
+            ctx.mouse_x = 50.0
+            ctx.mouse_y = 50.0
+            ctx.mouse_clicked = true
+            ctx.font_atlas = FontAtlas()  # no glyphs, text won't render
+
+            clicked = ui_button(ctx, "Test", x=0, y=0, width=100, height=100)
+            @test clicked == true
+
+            # Miss
+            clear_ui!(ctx)
+            ctx.mouse_x = 200.0
+            clicked2 = ui_button(ctx, "Test", x=0, y=0, width=100, height=100)
+            @test clicked2 == false
+        end
+
+        @testset "draw command batching" begin
+            ctx = UIContext()
+            # Two rects with same texture (0) should merge
+            ui_rect(ctx, x=0, y=0, width=50, height=50)
+            ui_rect(ctx, x=60, y=0, width=50, height=50)
+            @test length(ctx.draw_commands) == 1
+            @test ctx.draw_commands[1].vertex_count == 12  # 2 quads merged
+        end
+
+        @testset "UIDrawCommand" begin
+            cmd = UIDrawCommand(0, 6, UInt32(1), true)
+            @test cmd.vertex_offset == 0
+            @test cmd.vertex_count == 6
+            @test cmd.texture_id == UInt32(1)
+            @test cmd.is_font == true
+        end
+
+        @testset "FontAtlas defaults" begin
+            atlas = FontAtlas()
+            @test atlas.texture_id == UInt32(0)
+            @test atlas.atlas_width == 0
+            @test isempty(atlas.glyphs)
+        end
+
+        @testset "GlyphInfo" begin
+            g = GlyphInfo(8.0f0, 1.0f0, 10.0f0, 7.0f0, 12.0f0, 0.1f0, 0.2f0, 0.05f0, 0.1f0)
+            @test g.advance_x == 8.0f0
+            @test g.width == 7.0f0
+            @test g.uv_x == 0.1f0
+        end
+
+        @testset "measure_text with empty atlas" begin
+            atlas = FontAtlas()
+            w, h = measure_text(atlas, "Hello")
+            @test w == 0.0f0
+            @test h == 0.0f0
+        end
+
+        @testset "measure_text with mock glyphs" begin
+            atlas = FontAtlas()
+            atlas.font_size = 16.0f0
+            atlas.line_height = 19.2f0
+            atlas.glyphs['H'] = GlyphInfo(10.0f0, 0f0, 12f0, 8f0, 12f0, 0f0, 0f0, 0f0, 0f0)
+            atlas.glyphs['i'] = GlyphInfo(5.0f0, 0f0, 12f0, 4f0, 12f0, 0f0, 0f0, 0f0, 0f0)
+
+            w, h = measure_text(atlas, "Hi")
+            @test w == 15.0f0  # 10 + 5
+            @test h == 19.2f0
+        end
+
+        @testset "ui_image" begin
+            ctx = UIContext()
+            ui_image(ctx, UInt32(42), x=10, y=10, width=64, height=64)
+            @test length(ctx.draw_commands) == 1
+            @test ctx.draw_commands[1].texture_id == UInt32(42)
+            @test ctx.draw_commands[1].is_font == false
+            @test length(ctx.vertices) == 48
+        end
+
+        @testset "UI renderer state" begin
+            reset_ui_renderer!()
+            renderer = OpenReality.get_ui_renderer()
+            @test renderer.initialized == false
+            @test renderer.shader === nothing
+        end
+    end
+
+    @testset "Skeletal Animation" begin
+        @testset "BoneComponent defaults" begin
+            bone = BoneComponent()
+            @test bone.inverse_bind_matrix == Mat4f(I)
+            @test bone.bone_index == 0
+            @test bone.name == ""
+        end
+
+        @testset "BoneComponent custom" begin
+            ibm = Mat4f(
+                1, 0, 0, 0,
+                0, 1, 0, 0,
+                0, 0, 1, 0,
+                5, 3, 1, 1
+            )
+            bone = BoneComponent(inverse_bind_matrix=ibm, bone_index=3, name="spine")
+            @test bone.inverse_bind_matrix == ibm
+            @test bone.bone_index == 3
+            @test bone.name == "spine"
+        end
+
+        @testset "SkinnedMeshComponent defaults" begin
+            skin = SkinnedMeshComponent()
+            @test isempty(skin.bone_entities)
+            @test isempty(skin.bone_matrices)
+        end
+
+        @testset "SkinnedMeshComponent custom" begin
+            bone_eids = [EntityID(1), EntityID(2), EntityID(3)]
+            mats = [Mat4f(I), Mat4f(I), Mat4f(I)]
+            skin = SkinnedMeshComponent(bone_entities=bone_eids, bone_matrices=mats)
+            @test length(skin.bone_entities) == 3
+            @test length(skin.bone_matrices) == 3
+        end
+
+        @testset "SkinnedMeshComponent is mutable" begin
+            skin = SkinnedMeshComponent()
+            push!(skin.bone_entities, EntityID(1))
+            @test length(skin.bone_entities) == 1
+            push!(skin.bone_matrices, Mat4f(I))
+            @test length(skin.bone_matrices) == 1
+        end
+
+        @testset "MeshComponent bone fields backward compatible" begin
+            # Old-style construction without bone data
+            mesh = MeshComponent(
+                vertices=[Point3f(0, 0, 0)],
+                indices=UInt32[0],
+                normals=[Vec3f(0, 1, 0)]
+            )
+            @test isempty(mesh.bone_weights)
+            @test isempty(mesh.bone_indices)
+        end
+
+        @testset "MeshComponent with bone data" begin
+            weights = [Vec4f(0.5, 0.3, 0.2, 0.0)]
+            indices = [BoneIndices4((UInt16(0), UInt16(1), UInt16(2), UInt16(0)))]
+            mesh = MeshComponent(
+                vertices=[Point3f(0, 0, 0)],
+                indices=UInt32[0],
+                normals=[Vec3f(0, 1, 0)],
+                bone_weights=weights,
+                bone_indices=indices
+            )
+            @test length(mesh.bone_weights) == 1
+            @test length(mesh.bone_indices) == 1
+            @test mesh.bone_weights[1][1] == 0.5f0
+            @test mesh.bone_indices[1][1] == UInt16(0)
+        end
+
+        @testset "MAX_BONES constant" begin
+            @test MAX_BONES == 128
+        end
+
+        @testset "Bone matrix computation — identity" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            # Create a mesh entity and a bone entity at the same position
+            mesh_eid = create_entity_id()
+            add_component!(mesh_eid, transform(position=Vec3d(0, 0, 0)))
+
+            bone_eid = create_entity_id()
+            add_component!(bone_eid, transform(position=Vec3d(0, 0, 0)))
+            add_component!(bone_eid, BoneComponent(
+                inverse_bind_matrix=Mat4f(I),
+                bone_index=0,
+                name="root"
+            ))
+
+            skin = SkinnedMeshComponent(
+                bone_entities=[bone_eid],
+                bone_matrices=[Mat4f(I)]
+            )
+            add_component!(mesh_eid, skin)
+
+            update_skinned_meshes!()
+
+            skin_comp = get_component(mesh_eid, SkinnedMeshComponent)
+            # Both at origin with identity IBM → bone matrix should be identity
+            @test skin_comp.bone_matrices[1] ≈ Mat4f(I) atol=1e-5
+        end
+
+        @testset "Bone matrix computation — translated bone" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            mesh_eid = create_entity_id()
+            add_component!(mesh_eid, transform(position=Vec3d(0, 0, 0)))
+
+            bone_eid = create_entity_id()
+            add_component!(bone_eid, transform(position=Vec3d(5, 0, 0)))
+            add_component!(bone_eid, BoneComponent(
+                inverse_bind_matrix=Mat4f(I),
+                bone_index=0,
+                name="arm"
+            ))
+
+            skin = SkinnedMeshComponent(
+                bone_entities=[bone_eid],
+                bone_matrices=[Mat4f(I)]
+            )
+            add_component!(mesh_eid, skin)
+
+            update_skinned_meshes!()
+
+            skin_comp = get_component(mesh_eid, SkinnedMeshComponent)
+            # Bone is at (5,0,0) with identity IBM → matrix should translate by (5,0,0)
+            bm = skin_comp.bone_matrices[1]
+            @test bm[1,4] ≈ 5.0f0 atol=1e-5
+            @test bm[2,4] ≈ 0.0f0 atol=1e-5
+            @test bm[3,4] ≈ 0.0f0 atol=1e-5
+        end
+
+        @testset "Bone matrix with inverse bind matrix" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            mesh_eid = create_entity_id()
+            add_component!(mesh_eid, transform(position=Vec3d(0, 0, 0)))
+
+            bone_eid = create_entity_id()
+            add_component!(bone_eid, transform(position=Vec3d(3, 0, 0)))
+
+            # IBM that undoes the bind pose translation
+            ibm = Mat4f(
+                1, 0, 0, 0,
+                0, 1, 0, 0,
+                0, 0, 1, 0,
+                -3, 0, 0, 1
+            )
+            add_component!(bone_eid, BoneComponent(
+                inverse_bind_matrix=ibm,
+                bone_index=0,
+                name="bone"
+            ))
+
+            skin = SkinnedMeshComponent(
+                bone_entities=[bone_eid],
+                bone_matrices=[Mat4f(I)]
+            )
+            add_component!(mesh_eid, skin)
+
+            update_skinned_meshes!()
+
+            skin_comp = get_component(mesh_eid, SkinnedMeshComponent)
+            # Bone world = translate(3,0,0), IBM = translate(-3,0,0)
+            # Result: translate(3,0,0) * translate(-3,0,0) = identity
+            bm = skin_comp.bone_matrices[1]
+            @test bm ≈ Mat4f(I) atol=1e-4
+        end
+
+        @testset "Multi-bone skinning" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            mesh_eid = create_entity_id()
+            add_component!(mesh_eid, transform(position=Vec3d(0, 0, 0)))
+
+            bone1 = create_entity_id()
+            add_component!(bone1, transform(position=Vec3d(1, 0, 0)))
+            add_component!(bone1, BoneComponent(bone_index=0, name="bone1"))
+
+            bone2 = create_entity_id()
+            add_component!(bone2, transform(position=Vec3d(0, 2, 0)))
+            add_component!(bone2, BoneComponent(bone_index=1, name="bone2"))
+
+            skin = SkinnedMeshComponent(
+                bone_entities=[bone1, bone2],
+                bone_matrices=[Mat4f(I), Mat4f(I)]
+            )
+            add_component!(mesh_eid, skin)
+
+            update_skinned_meshes!()
+
+            skin_comp = get_component(mesh_eid, SkinnedMeshComponent)
+            @test length(skin_comp.bone_matrices) == 2
+            # Each bone should have a translation matrix
+            @test skin_comp.bone_matrices[1][1,4] ≈ 1.0f0 atol=1e-5
+            @test skin_comp.bone_matrices[2][2,4] ≈ 2.0f0 atol=1e-5
+        end
+
+        @testset "update_skinned_meshes! with no skinned entities" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            # Should not error with no skinned entities
+            update_skinned_meshes!()
+            @test true
+        end
+
+        @testset "Bone and skin components in ECS" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            e1 = create_entity_id()
+            add_component!(e1, BoneComponent(bone_index=0, name="root"))
+
+            e2 = create_entity_id()
+            add_component!(e2, SkinnedMeshComponent(bone_entities=[e1]))
+
+            @test has_component(e1, BoneComponent)
+            @test has_component(e2, SkinnedMeshComponent)
+            @test get_component(e1, BoneComponent).name == "root"
+            @test get_component(e2, SkinnedMeshComponent).bone_entities == [e1]
+        end
+
+        @testset "BoneIndices4 type" begin
+            bi = BoneIndices4((UInt16(0), UInt16(1), UInt16(2), UInt16(3)))
+            @test bi[1] == UInt16(0)
+            @test bi[2] == UInt16(1)
+            @test bi[3] == UInt16(2)
+            @test bi[4] == UInt16(3)
+        end
+
+        @testset "Skinning resizes bone_matrices if needed" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            mesh_eid = create_entity_id()
+            add_component!(mesh_eid, transform())
+
+            bone_eid = create_entity_id()
+            add_component!(bone_eid, transform())
+            add_component!(bone_eid, BoneComponent(bone_index=0))
+
+            # Start with empty bone_matrices
+            skin = SkinnedMeshComponent(
+                bone_entities=[bone_eid],
+                bone_matrices=Mat4f[]
+            )
+            add_component!(mesh_eid, skin)
+
+            update_skinned_meshes!()
+
+            skin_comp = get_component(mesh_eid, SkinnedMeshComponent)
+            @test length(skin_comp.bone_matrices) == 1
+        end
+    end
+
+    # ==================================================================
+    # Particle System Tests
+    # ==================================================================
+    @testset "Particle System" begin
+        @testset "ParticleSystemComponent defaults" begin
+            comp = ParticleSystemComponent()
+            @test comp.max_particles == 256
+            @test comp.emission_rate == 20.0f0
+            @test comp.burst_count == 0
+            @test comp.lifetime_min == 1.0f0
+            @test comp.lifetime_max == 2.0f0
+            @test comp.gravity_modifier == 1.0f0
+            @test comp.damping == 0.0f0
+            @test comp.start_size_min == 0.1f0
+            @test comp.start_size_max == 0.3f0
+            @test comp.end_size == 0.0f0
+            @test comp.start_alpha == 1.0f0
+            @test comp.end_alpha == 0.0f0
+            @test comp.additive == false
+            @test comp._active == true
+            @test comp._emit_accumulator == 0.0f0
+        end
+
+        @testset "ParticleSystemComponent custom" begin
+            comp = ParticleSystemComponent(
+                max_particles=500,
+                emission_rate=100.0f0,
+                burst_count=50,
+                lifetime_min=0.5f0,
+                lifetime_max=3.0f0,
+                gravity_modifier=0.5f0,
+                damping=0.1f0,
+                start_size_min=0.5f0,
+                start_size_max=1.0f0,
+                end_size=0.1f0,
+                start_color=RGB{Float32}(1.0f0, 0.0f0, 0.0f0),
+                end_color=RGB{Float32}(1.0f0, 1.0f0, 0.0f0),
+                start_alpha=0.8f0,
+                end_alpha=0.1f0,
+                additive=true
+            )
+            @test comp.max_particles == 500
+            @test comp.emission_rate == 100.0f0
+            @test comp.burst_count == 50
+            @test comp.gravity_modifier == 0.5f0
+            @test comp.additive == true
+            @test comp.start_color.r == 1.0f0
+            @test comp.start_color.g == 0.0f0
+            @test comp.end_color.g == 1.0f0
+        end
+
+        @testset "ParticleSystemComponent mutability" begin
+            comp = ParticleSystemComponent()
+            comp.emission_rate = 50.0f0
+            @test comp.emission_rate == 50.0f0
+            comp._active = false
+            @test comp._active == false
+            comp.burst_count = 10
+            @test comp.burst_count == 10
+        end
+
+        @testset "ParticleSystemComponent in ECS" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            eid = create_entity_id()
+            comp = ParticleSystemComponent(emission_rate=30.0f0)
+            add_component!(eid, comp)
+
+            @test has_component(eid, ParticleSystemComponent)
+            retrieved = get_component(eid, ParticleSystemComponent)
+            @test retrieved.emission_rate == 30.0f0
+        end
+
+        @testset "Particle struct" begin
+            p = Particle()
+            @test p.position == Vec3f(0, 0, 0)
+            @test p.velocity == Vec3f(0, 0, 0)
+            @test p.lifetime == 0.0f0
+            @test p.max_lifetime == 1.0f0
+            @test p.size == 0.1f0
+            @test p.alive == false
+        end
+
+        @testset "ParticlePool creation" begin
+            pool = ParticlePool(100)
+            @test length(pool.particles) == 100
+            @test pool.alive_count == 0
+            @test pool.vertex_count == 0
+            @test length(pool.vertex_data) == 100 * 6 * 9
+        end
+
+        @testset "Particle emission" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+            reset_particle_pools!()
+
+            comp = ParticleSystemComponent(max_particles=10, emission_rate=0.0f0, burst_count=5)
+            pool = ParticlePool(10)
+            origin = Vec3f(1.0f0, 2.0f0, 3.0f0)
+
+            # Emit 5 particles via burst
+            for _ in 1:5
+                OpenReality._emit_particle!(pool, comp, origin)
+            end
+
+            @test pool.alive_count == 5
+            # Check first particle was placed at origin
+            @test pool.particles[1].alive == true
+            @test pool.particles[1].position == origin
+            @test pool.particles[1].lifetime > 0.0f0
+        end
+
+        @testset "Particle simulation" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            comp = ParticleSystemComponent(
+                max_particles=5,
+                gravity_modifier=1.0f0,
+                damping=0.0f0,
+                lifetime_min=10.0f0,
+                lifetime_max=10.0f0
+            )
+            pool = ParticlePool(5)
+            origin = Vec3f(0, 10, 0)
+
+            # Emit one particle
+            OpenReality._emit_particle!(pool, comp, origin)
+            @test pool.alive_count == 1
+
+            # Simulate for 1 second
+            dt = 1.0f0
+            OpenReality._simulate_particles!(pool, comp, dt)
+
+            p = pool.particles[1]
+            @test p.alive == true
+            # Gravity should have pulled velocity down
+            @test p.velocity[2] < 0.0f0
+            # Position should have changed
+            @test p.position[2] < 10.0f0
+        end
+
+        @testset "Particle lifetime expiry" begin
+            comp = ParticleSystemComponent(
+                max_particles=5,
+                lifetime_min=0.5f0,
+                lifetime_max=0.5f0
+            )
+            pool = ParticlePool(5)
+
+            OpenReality._emit_particle!(pool, comp, Vec3f(0, 0, 0))
+            @test pool.alive_count == 1
+
+            # Simulate past lifetime
+            OpenReality._simulate_particles!(pool, comp, 1.0f0)
+            @test pool.alive_count == 0
+            @test pool.particles[1].alive == false
+        end
+
+        @testset "Particle damping" begin
+            comp = ParticleSystemComponent(
+                max_particles=5,
+                gravity_modifier=0.0f0,
+                damping=0.5f0,
+                lifetime_min=10.0f0,
+                lifetime_max=10.0f0,
+                velocity_min=Vec3f(1, 1, 1),
+                velocity_max=Vec3f(1, 1, 1)
+            )
+            pool = ParticlePool(5)
+
+            OpenReality._emit_particle!(pool, comp, Vec3f(0, 0, 0))
+            initial_speed = sum(abs.(pool.particles[1].velocity))
+
+            OpenReality._simulate_particles!(pool, comp, 1.0f0)
+            final_speed = sum(abs.(pool.particles[1].velocity))
+
+            @test final_speed < initial_speed
+        end
+
+        @testset "Billboard vertex generation" begin
+            comp = ParticleSystemComponent(
+                max_particles=5,
+                start_size_min=1.0f0,
+                start_size_max=1.0f0,
+                end_size=1.0f0,
+                start_alpha=1.0f0,
+                end_alpha=1.0f0,
+                lifetime_min=10.0f0,
+                lifetime_max=10.0f0
+            )
+            pool = ParticlePool(5)
+
+            OpenReality._emit_particle!(pool, comp, Vec3f(0, 0, 0))
+
+            cam_right = Vec3f(1, 0, 0)
+            cam_up = Vec3f(0, 1, 0)
+
+            vert_count = OpenReality._build_billboard_vertices!(pool, comp, cam_right, cam_up)
+
+            @test vert_count == 6  # 2 triangles = 6 vertices
+            @test pool.vertex_count == 6
+
+            # Check vertex data is populated (first vertex: pos3 + uv2 + color4)
+            @test pool.vertex_data[1] != 0.0f0 || pool.vertex_data[2] != 0.0f0 || pool.vertex_data[3] != 0.0f0  # at least one pos component nonzero
+        end
+
+        @testset "Pool full stops emission" begin
+            comp = ParticleSystemComponent(max_particles=3, lifetime_min=10.0f0, lifetime_max=10.0f0)
+            pool = ParticlePool(3)
+
+            for _ in 1:3
+                @test OpenReality._emit_particle!(pool, comp, Vec3f(0,0,0)) == true
+            end
+            # Pool should be full now
+            @test OpenReality._emit_particle!(pool, comp, Vec3f(0,0,0)) == false
+        end
+
+        @testset "Back-to-front sorting" begin
+            comp = ParticleSystemComponent(max_particles=3, lifetime_min=10.0f0, lifetime_max=10.0f0)
+            pool = ParticlePool(3)
+
+            # Emit 3 particles at different distances
+            OpenReality._emit_particle!(pool, comp, Vec3f(0, 0, 0))
+            pool.particles[1].position = Vec3f(0, 0, 1)
+            OpenReality._emit_particle!(pool, comp, Vec3f(0, 0, 0))
+            pool.particles[2].position = Vec3f(0, 0, 10)
+            OpenReality._emit_particle!(pool, comp, Vec3f(0, 0, 0))
+            pool.particles[3].position = Vec3f(0, 0, 5)
+
+            cam_pos = Vec3f(0, 0, 0)
+            OpenReality._sort_particles_back_to_front!(pool, cam_pos)
+
+            # After sorting, farthest should be first among alive
+            alive_positions = [p.position[3] for p in pool.particles if p.alive]
+            @test alive_positions[1] >= alive_positions[2]
+            @test alive_positions[2] >= alive_positions[3]
+        end
+
+        @testset "update_particles! with no emitters" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+            reset_particle_pools!()
+
+            # Should not error
+            update_particles!(0.016f0, Vec3f(0,0,0), Vec3f(1,0,0), Vec3f(0,1,0))
+            @test true
+        end
+
+        @testset "Full particle update cycle" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+            reset_particle_pools!()
+
+            eid = create_entity_id()
+            add_component!(eid, transform(position=Vec3d(0, 5, 0)))
+            add_component!(eid, ParticleSystemComponent(
+                max_particles=50,
+                emission_rate=100.0f0,
+                burst_count=10,
+                lifetime_min=2.0f0,
+                lifetime_max=3.0f0
+            ))
+
+            cam_pos = Vec3f(0, 0, 10)
+            cam_right = Vec3f(1, 0, 0)
+            cam_up = Vec3f(0, 1, 0)
+
+            # First frame: burst + continuous emission
+            update_particles!(0.1f0, cam_pos, cam_right, cam_up)
+
+            @test haskey(PARTICLE_POOLS, eid)
+            pool = PARTICLE_POOLS[eid]
+            @test pool.alive_count > 0
+            @test pool.vertex_count > 0
+
+            # Burst should be consumed
+            comp = get_component(eid, ParticleSystemComponent)
+            @test comp.burst_count == 0
+        end
+
+        @testset "Particle pool cleanup on entity removal" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+            reset_particle_pools!()
+
+            eid = create_entity_id()
+            add_component!(eid, transform())
+            add_component!(eid, ParticleSystemComponent(burst_count=5))
+
+            cam = Vec3f(0,0,0)
+            update_particles!(0.016f0, cam, Vec3f(1,0,0), Vec3f(0,1,0))
+            @test haskey(PARTICLE_POOLS, eid)
+
+            # Remove the component
+            remove_component!(eid, ParticleSystemComponent)
+
+            # Next update should clean up the pool
+            update_particles!(0.016f0, cam, Vec3f(1,0,0), Vec3f(0,1,0))
+            @test !haskey(PARTICLE_POOLS, eid)
+        end
+
+        @testset "Inactive emitter skipped" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+            reset_particle_pools!()
+
+            eid = create_entity_id()
+            add_component!(eid, transform())
+            comp = ParticleSystemComponent(burst_count=5, _active=false)
+            add_component!(eid, comp)
+
+            update_particles!(0.016f0, Vec3f(0,0,0), Vec3f(1,0,0), Vec3f(0,1,0))
+
+            # Pool shouldn't exist since emitter is inactive
+            @test !haskey(PARTICLE_POOLS, eid)
+        end
+
+        @testset "GRAVITY constant" begin
+            @test OpenReality.GRAVITY == Vec3f(0.0f0, -9.81f0, 0.0f0)
+        end
     end
 end

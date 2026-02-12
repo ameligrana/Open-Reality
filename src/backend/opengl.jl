@@ -463,6 +463,27 @@ function bind_material_textures!(sp::ShaderProgram, material::MaterialComponent,
     return nothing
 end
 
+# ---- Skinning Helper ----
+
+"""
+    _upload_skinning_uniforms!(sp, entity_id, gpu_mesh)
+
+Upload bone matrices for a skinned mesh. Sets u_HasSkinning and u_BoneMatrices.
+"""
+function _upload_skinning_uniforms!(sp::ShaderProgram, entity_id::EntityID, gpu_mesh::GPUMesh)
+    if gpu_mesh.has_skinning
+        skin = get_component(entity_id, SkinnedMeshComponent)
+        if skin !== nothing && !isempty(skin.bone_matrices)
+            set_uniform!(sp, "u_HasSkinning", Int32(1))
+            for i in 1:min(length(skin.bone_matrices), MAX_BONES)
+                set_uniform!(sp, "u_BoneMatrices[$(i - 1)]", skin.bone_matrices[i])
+            end
+            return
+        end
+    end
+    set_uniform!(sp, "u_HasSkinning", Int32(0))
+end
+
 # ---- Per-entity rendering helper ----
 
 """
@@ -493,6 +514,9 @@ function _render_entity!(backend::OpenGLBackend, sp::ShaderProgram,
 
     # Get or upload GPU mesh
     gpu_mesh = get_or_upload_mesh!(backend.gpu_cache, entity_id, mesh)
+
+    # Upload skinning uniforms
+    _upload_skinning_uniforms!(sp, entity_id, gpu_mesh)
 
     # Draw
     glBindVertexArray(gpu_mesh.vao)
@@ -572,6 +596,10 @@ function render_gbuffer_pass!(backend::OpenGLBackend, pipeline::DeferredPipeline
 
         # Draw mesh
         gpu_mesh = get_or_upload_mesh!(backend.gpu_cache, entity_id, mesh)
+
+        # Upload skinning uniforms
+        _upload_skinning_uniforms!(sp, entity_id, gpu_mesh)
+
         glBindVertexArray(gpu_mesh.vao)
         glDrawElements(GL_TRIANGLES, gpu_mesh.index_count, GL_UNSIGNED_INT, C_NULL)
         glBindVertexArray(GLuint(0))
@@ -780,6 +808,10 @@ function render_frame!(backend::OpenGLBackend, scene::Scene)
                     set_uniform!(depth_shader, "u_Model", model)
 
                     gpu_mesh = get_or_upload_mesh!(backend.gpu_cache, entity_id, mesh)
+
+                    # Upload skinning for shadow pass
+                    _upload_skinning_uniforms!(depth_shader, entity_id, gpu_mesh)
+
                     glBindVertexArray(gpu_mesh.vao)
                     glDrawElements(GL_TRIANGLES, gpu_mesh.index_count, GL_UNSIGNED_INT, C_NULL)
                     glBindVertexArray(GLuint(0))
@@ -1086,6 +1118,17 @@ function render_frame!(backend::OpenGLBackend, scene::Scene)
         viewport = Int32[0, 0, 0, 0]
         glGetIntegerv(GL_VIEWPORT, viewport)
         end_post_process!(backend.post_process, Int(viewport[3]), Int(viewport[4]))
+    end
+
+    # ---- Particle rendering (after transparent pass, before UI) ----
+    render_particles!(view, proj)
+
+    # ---- UI rendering (after all 3D passes, before swap) ----
+    if _UI_CALLBACK[] !== nothing && _UI_CONTEXT[] !== nothing
+        ctx = _UI_CONTEXT[]
+        clear_ui!(ctx)
+        _UI_CALLBACK[](ctx)
+        render_ui!(ctx)
     end
 
     swap_buffers!(backend.window)

@@ -18,11 +18,12 @@ import GLTF as GLTFLib
 const Point3f = Point{3, Float32}
 const Vec3f = Vec{3, Float32}
 const Vec2f = Vec{2, Float32}
+const Vec4f = Vec{4, Float32}
 const Mat4f = SMatrix{4, 4, Float32, 16}
 const Mat3f = SMatrix{3, 3, Float32, 9}
 
 # Re-export commonly used types from dependencies
-export Point3f, Vec3f, Vec2f, Mat4f, Mat3f
+export Point3f, Vec3f, Vec2f, Vec4f, Mat4f, Mat3f
 export RGB
 
 # Re-export Quaternion from Quaternions.jl
@@ -52,6 +53,9 @@ include("physics/shapes.jl")
 
 include("components/rigidbody.jl")
 include("components/animation.jl")
+include("components/audio.jl")
+include("components/skeleton.jl")
+include("components/particle_system.jl")
 
 # Physics engine (after rigidbody — solver/world use RigidBodyComponent)
 include("physics/inertia.jl")
@@ -71,10 +75,21 @@ include("physics/world.jl")
 include("windowing/glfw.jl")
 include("windowing/input.jl")
 
+# Audio backend (after ECS — uses EntityID)
+include("audio/openal_backend.jl")
+
 # Systems (after windowing — uses GLFW key constants)
 include("systems/player_controller.jl")
 include("systems/physics.jl")
 include("systems/animation.jl")
+include("systems/skinning.jl")
+include("systems/audio.jl")
+include("systems/particles.jl")
+
+# UI system (after components and ECS — uses types)
+include("ui/types.jl")
+include("ui/font.jl")
+include("ui/widgets.jl")
 
 # GPU Abstraction Layer (abstract types that concrete backends implement)
 include("backend/gpu_types.jl")
@@ -113,6 +128,8 @@ include("backend/opengl/opengl_taa.jl")           # TAAPass
 include("backend/opengl/opengl_pbr.jl")           # PBR shaders, upload_lights!
 include("backend/opengl/opengl_postprocess.jl")   # PostProcessPipeline
 include("backend/opengl/opengl_deferred.jl")      # DeferredPipeline
+include("backend/opengl/opengl_ui.jl")            # UIRenderer, render_ui!
+include("backend/opengl/opengl_particles.jl")    # Particle renderer
 include("backend/opengl.jl")                      # OpenGLBackend, render_frame!
 
 # Shared rendering orchestration (after backend — uses ECS + frustum culling)
@@ -230,6 +247,29 @@ export InterpolationMode, INTERP_STEP, INTERP_LINEAR, INTERP_CUBICSPLINE
 export AnimationChannel, AnimationClip, AnimationComponent
 export update_animations!
 
+# Export Skeletal Animation
+export BoneComponent, SkinnedMeshComponent, BoneIndices4
+export update_skinned_meshes!, MAX_BONES
+
+# Export Audio
+export AudioListenerComponent, AudioSourceComponent
+export AudioConfig, update_audio!
+export init_audio!, shutdown_audio!, reset_audio_state!
+export load_wav, get_or_load_buffer!
+
+# Export UI
+export UIContext, UIDrawCommand, FontAtlas, GlyphInfo
+export orthographic_matrix, clear_ui!, measure_text
+export ui_rect, ui_text, ui_button, ui_progress_bar, ui_image
+export init_ui_renderer!, shutdown_ui_renderer!, render_ui!, reset_ui_renderer!
+export get_or_create_font_atlas!, reset_font_cache!
+
+# Export Particles
+export ParticleSystemComponent
+export Particle, ParticlePool, PARTICLE_POOLS
+export update_particles!, reset_particle_pools!
+export init_particle_renderer!, shutdown_particle_renderer!, render_particles!, reset_particle_renderer!
+
 # Export Shadow Mapping
 export ShadowMap, create_shadow_map!, destroy_shadow_map!, compute_light_space_matrix
 
@@ -332,20 +372,28 @@ export find_active_camera, get_view_matrix, get_projection_matrix
 export load_model, load_obj, load_gltf
 
 """
-    render(scene::Scene; backend=OpenGLBackend(), width=1280, height=720, title="OpenReality", post_process=nothing)
+    render(scene::Scene; backend=OpenGLBackend(), width=1280, height=720, title="OpenReality", post_process=nothing, ui=nothing)
 
 Start the PBR render loop for the given scene.
 Opens a window and renders until closed.
 
 Pass `backend=MetalBackend()` on macOS to use the Metal renderer.
 Pass `backend=VulkanBackend()` on Linux/Windows to use the Vulkan renderer.
+
+Pass a `ui` callback to render immediate-mode UI each frame:
+```julia
+render(scene, ui = ctx -> begin
+    ui_text(ctx, "Hello!", x=10, y=10, size=32)
+end)
+```
 """
 function render(scene::Scene;
                 backend::AbstractBackend = OpenGLBackend(),
                 width::Int = 1280, height::Int = 720,
                 title::String = "OpenReality",
-                post_process::Union{PostProcessConfig, Nothing} = nothing)
-    run_render_loop!(scene, backend=backend, width=width, height=height, title=title, post_process=post_process)
+                post_process::Union{PostProcessConfig, Nothing} = nothing,
+                ui::Union{Function, Nothing} = nothing)
+    run_render_loop!(scene, backend=backend, width=width, height=height, title=title, post_process=post_process, ui=ui)
 end
 
 export render
