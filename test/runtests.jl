@@ -675,6 +675,940 @@ using LinearAlgebra
         end
     end
 
+    @testset "Physics — Shapes" begin
+        @testset "CapsuleShape defaults" begin
+            c = CapsuleShape()
+            @test c.radius == 0.5f0
+            @test c.half_height == 0.5f0
+            @test c.axis == CAPSULE_Y
+        end
+
+        @testset "CapsuleShape custom" begin
+            c = CapsuleShape(radius=0.3f0, half_height=0.8f0, axis=CAPSULE_X)
+            @test c.radius == 0.3f0
+            @test c.half_height == 0.8f0
+            @test c.axis == CAPSULE_X
+        end
+
+        @testset "OBBShape" begin
+            o = OBBShape(Vec3f(1, 2, 3))
+            @test o.half_extents == Vec3f(1, 2, 3)
+        end
+
+        @testset "ConvexHullShape" begin
+            verts = [Vec3f(0, 1, 0), Vec3f(-1, 0, 0), Vec3f(1, 0, 0), Vec3f(0, 0, -1)]
+            ch = ConvexHullShape(verts)
+            @test length(ch.vertices) == 4
+        end
+
+        @testset "CompoundShape" begin
+            cs = CompoundShape([
+                CompoundChild(AABBShape(Vec3f(0.5, 0.25, 0.25)), position=Vec3d(0, 0.25, 0)),
+                CompoundChild(SphereShape(0.3f0), position=Vec3d(0, -0.25, 0))
+            ])
+            @test length(cs.children) == 2
+            @test cs.children[1].shape isa AABBShape
+            @test cs.children[2].shape isa SphereShape
+            @test cs.children[1].local_position == Vec3d(0, 0.25, 0)
+        end
+
+        @testset "ColliderComponent is_trigger" begin
+            c = ColliderComponent(is_trigger=true)
+            @test c.is_trigger == true
+
+            c2 = ColliderComponent()
+            @test c2.is_trigger == false
+        end
+
+        @testset "AABB computation — sphere" begin
+            aabb = OpenReality.compute_world_aabb(
+                SphereShape(1.0f0), Vec3d(0, 5, 0),
+                Quaterniond(1, 0, 0, 0), Vec3d(1, 1, 1), Vec3f(0, 0, 0)
+            )
+            @test aabb.min_pt ≈ Vec3d(-1, 4, -1) atol=1e-10
+            @test aabb.max_pt ≈ Vec3d(1, 6, 1) atol=1e-10
+        end
+
+        @testset "AABB computation — AABB" begin
+            aabb = OpenReality.compute_world_aabb(
+                AABBShape(Vec3f(1, 2, 3)), Vec3d(0, 0, 0),
+                Quaterniond(1, 0, 0, 0), Vec3d(1, 1, 1), Vec3f(0, 0, 0)
+            )
+            @test aabb.min_pt ≈ Vec3d(-1, -2, -3) atol=1e-10
+            @test aabb.max_pt ≈ Vec3d(1, 2, 3) atol=1e-10
+        end
+
+        @testset "AABB computation — capsule Y-axis" begin
+            aabb = OpenReality.compute_world_aabb(
+                CapsuleShape(radius=0.5f0, half_height=1.0f0, axis=CAPSULE_Y),
+                Vec3d(0, 0, 0), Quaterniond(1, 0, 0, 0), Vec3d(1, 1, 1), Vec3f(0, 0, 0)
+            )
+            # Capsule along Y: extends ±1.0 on Y (half_height) + ±0.5 (radius)
+            @test aabb.min_pt[2] ≈ -1.5 atol=1e-10
+            @test aabb.max_pt[2] ≈ 1.5 atol=1e-10
+            @test aabb.min_pt[1] ≈ -0.5 atol=1e-10
+            @test aabb.max_pt[1] ≈ 0.5 atol=1e-10
+        end
+
+        @testset "AABB computation — OBB" begin
+            aabb = OpenReality.compute_world_aabb(
+                OBBShape(Vec3f(1, 1, 1)), Vec3d(0, 0, 0),
+                Quaterniond(1, 0, 0, 0), Vec3d(1, 1, 1), Vec3f(0, 0, 0)
+            )
+            @test aabb.min_pt ≈ Vec3d(-1, -1, -1) atol=1e-10
+            @test aabb.max_pt ≈ Vec3d(1, 1, 1) atol=1e-10
+        end
+
+        @testset "AABB computation — ConvexHull" begin
+            aabb = OpenReality.compute_world_aabb(
+                ConvexHullShape([Vec3f(0, 1, 0), Vec3f(-1, 0, 0), Vec3f(1, 0, 0), Vec3f(0, 0, -1)]),
+                Vec3d(0, 0, 0), Quaterniond(1, 0, 0, 0), Vec3d(1, 1, 1), Vec3f(0, 0, 0)
+            )
+            @test aabb.min_pt[1] ≈ -1.0 atol=1e-10
+            @test aabb.max_pt[1] ≈ 1.0 atol=1e-10
+            @test aabb.max_pt[2] ≈ 1.0 atol=1e-10
+        end
+
+        @testset "AABB computation — CompoundShape" begin
+            cs = CompoundShape([
+                CompoundChild(AABBShape(Vec3f(0.5, 0.5, 0.5)), position=Vec3d(2, 0, 0)),
+                CompoundChild(AABBShape(Vec3f(0.5, 0.5, 0.5)), position=Vec3d(-2, 0, 0))
+            ])
+            aabb = OpenReality.compute_world_aabb(
+                cs, Vec3d(0, 0, 0), Quaterniond(1, 0, 0, 0), Vec3d(1, 1, 1), Vec3f(0, 0, 0)
+            )
+            @test aabb.min_pt[1] ≈ -2.5 atol=1e-10
+            @test aabb.max_pt[1] ≈ 2.5 atol=1e-10
+        end
+    end
+
+    @testset "Physics — Broadphase" begin
+        @testset "SpatialHashGrid insert and query" begin
+            grid = OpenReality.SpatialHashGrid(cell_size=2.0)
+
+            # Two overlapping AABBs
+            aabb_a = OpenReality.AABB3D(Vec3d(0, 0, 0), Vec3d(1, 1, 1))
+            aabb_b = OpenReality.AABB3D(Vec3d(0.5, 0.5, 0.5), Vec3d(1.5, 1.5, 1.5))
+            insert!(grid, EntityID(1), aabb_a)
+            insert!(grid, EntityID(2), aabb_b)
+
+            pairs = OpenReality.query_pairs(grid)
+            @test length(pairs) == 1
+            @test pairs[1].entity_a == EntityID(1) || pairs[1].entity_b == EntityID(1)
+        end
+
+        @testset "SpatialHashGrid no overlap" begin
+            grid = OpenReality.SpatialHashGrid(cell_size=2.0)
+
+            aabb_a = OpenReality.AABB3D(Vec3d(0, 0, 0), Vec3d(1, 1, 1))
+            aabb_b = OpenReality.AABB3D(Vec3d(10, 10, 10), Vec3d(11, 11, 11))
+            insert!(grid, EntityID(1), aabb_a)
+            insert!(grid, EntityID(2), aabb_b)
+
+            pairs = OpenReality.query_pairs(grid)
+            @test isempty(pairs)
+        end
+
+        @testset "SpatialHashGrid clear" begin
+            grid = OpenReality.SpatialHashGrid(cell_size=2.0)
+            insert!(grid, EntityID(1), OpenReality.AABB3D(Vec3d(0,0,0), Vec3d(1,1,1)))
+            @test !isempty(grid.cells)
+            OpenReality.clear!(grid)
+            @test isempty(grid.cells)
+            @test isempty(grid.entity_aabbs)
+        end
+    end
+
+    @testset "Physics — Narrowphase" begin
+        @testset "Sphere vs Sphere collision" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            e1 = create_entity_id()
+            add_component!(e1, transform(position=Vec3d(0, 0, 0)))
+            add_component!(e1, ColliderComponent(shape=SphereShape(1.0f0)))
+
+            e2 = create_entity_id()
+            add_component!(e2, transform(position=Vec3d(1.5, 0, 0)))
+            add_component!(e2, ColliderComponent(shape=SphereShape(1.0f0)))
+
+            manifold = OpenReality.collide(e1, e2)
+            @test manifold !== nothing
+            @test length(manifold.points) == 1
+            @test manifold.points[1].penetration > 0
+            # Normal should point from A to B (positive X)
+            @test manifold.normal[1] > 0
+        end
+
+        @testset "Sphere vs Sphere no collision" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            e1 = create_entity_id()
+            add_component!(e1, transform(position=Vec3d(0, 0, 0)))
+            add_component!(e1, ColliderComponent(shape=SphereShape(0.5f0)))
+
+            e2 = create_entity_id()
+            add_component!(e2, transform(position=Vec3d(5, 0, 0)))
+            add_component!(e2, ColliderComponent(shape=SphereShape(0.5f0)))
+
+            manifold = OpenReality.collide(e1, e2)
+            @test manifold === nothing
+        end
+
+        @testset "AABB vs AABB collision" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            e1 = create_entity_id()
+            add_component!(e1, transform(position=Vec3d(0, 0, 0)))
+            add_component!(e1, ColliderComponent(shape=AABBShape(Vec3f(1, 1, 1))))
+
+            e2 = create_entity_id()
+            add_component!(e2, transform(position=Vec3d(1.5, 0, 0)))
+            add_component!(e2, ColliderComponent(shape=AABBShape(Vec3f(1, 1, 1))))
+
+            manifold = OpenReality.collide(e1, e2)
+            @test manifold !== nothing
+            @test manifold.points[1].penetration ≈ 0.5 atol=1e-10
+        end
+
+        @testset "Sphere vs AABB collision" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            e1 = create_entity_id()
+            add_component!(e1, transform(position=Vec3d(0, 0, 0)))
+            add_component!(e1, ColliderComponent(shape=SphereShape(1.0f0)))
+
+            e2 = create_entity_id()
+            add_component!(e2, transform(position=Vec3d(1.5, 0, 0)))
+            add_component!(e2, ColliderComponent(shape=AABBShape(Vec3f(1, 1, 1))))
+
+            manifold = OpenReality.collide(e1, e2)
+            @test manifold !== nothing
+            @test manifold.points[1].penetration > 0
+        end
+
+        @testset "Capsule vs Sphere collision" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            e1 = create_entity_id()
+            add_component!(e1, transform(position=Vec3d(0, 0, 0)))
+            add_component!(e1, ColliderComponent(shape=CapsuleShape(radius=0.5f0, half_height=1.0f0)))
+
+            e2 = create_entity_id()
+            add_component!(e2, transform(position=Vec3d(0.8, 0, 0)))
+            add_component!(e2, ColliderComponent(shape=SphereShape(0.5f0)))
+
+            manifold = OpenReality.collide(e1, e2)
+            @test manifold !== nothing
+            @test manifold.points[1].penetration > 0
+        end
+
+        @testset "Capsule vs Capsule collision" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            e1 = create_entity_id()
+            add_component!(e1, transform(position=Vec3d(0, 0, 0)))
+            add_component!(e1, ColliderComponent(shape=CapsuleShape(radius=0.3f0, half_height=0.5f0)))
+
+            e2 = create_entity_id()
+            add_component!(e2, transform(position=Vec3d(0.4, 0, 0)))
+            add_component!(e2, ColliderComponent(shape=CapsuleShape(radius=0.3f0, half_height=0.5f0)))
+
+            manifold = OpenReality.collide(e1, e2)
+            @test manifold !== nothing
+            @test manifold.points[1].penetration > 0
+        end
+
+        @testset "Capsule vs AABB collision" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            e1 = create_entity_id()
+            add_component!(e1, transform(position=Vec3d(0, 1, 0)))
+            add_component!(e1, ColliderComponent(shape=CapsuleShape(radius=0.5f0, half_height=0.5f0)))
+
+            e2 = create_entity_id()
+            add_component!(e2, transform(position=Vec3d(0, 0, 0)))
+            add_component!(e2, ColliderComponent(shape=AABBShape(Vec3f(2, 0.5, 2))))
+
+            manifold = OpenReality.collide(e1, e2)
+            @test manifold !== nothing
+        end
+    end
+
+    @testset "Physics — GJK/EPA" begin
+        @testset "OBB vs AABB collision" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            e1 = create_entity_id()
+            add_component!(e1, transform(position=Vec3d(0, 0, 0)))
+            add_component!(e1, ColliderComponent(shape=OBBShape(Vec3f(1, 1, 1))))
+
+            e2 = create_entity_id()
+            add_component!(e2, transform(position=Vec3d(1.5, 0, 0)))
+            add_component!(e2, ColliderComponent(shape=AABBShape(Vec3f(1, 1, 1))))
+
+            manifold = OpenReality.collide(e1, e2)
+            @test manifold !== nothing
+            @test manifold.points[1].penetration > 0
+        end
+
+        @testset "OBB vs OBB collision" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            e1 = create_entity_id()
+            add_component!(e1, transform(position=Vec3d(0, 0, 0)))
+            add_component!(e1, ColliderComponent(shape=OBBShape(Vec3f(1, 1, 1))))
+
+            e2 = create_entity_id()
+            add_component!(e2, transform(position=Vec3d(1.5, 0, 0)))
+            add_component!(e2, ColliderComponent(shape=OBBShape(Vec3f(1, 1, 1))))
+
+            manifold = OpenReality.collide(e1, e2)
+            @test manifold !== nothing
+        end
+
+        @testset "ConvexHull vs AABB collision" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            # Tetrahedron centered at origin
+            e1 = create_entity_id()
+            add_component!(e1, transform(position=Vec3d(0, 0, 0)))
+            add_component!(e1, ColliderComponent(shape=ConvexHullShape([
+                Vec3f(0, 1, 0), Vec3f(-1, -1, 0), Vec3f(1, -1, 0), Vec3f(0, 0, -1)
+            ])))
+
+            e2 = create_entity_id()
+            add_component!(e2, transform(position=Vec3d(0.5, 0, 0)))
+            add_component!(e2, ColliderComponent(shape=AABBShape(Vec3f(1, 1, 1))))
+
+            manifold = OpenReality.collide(e1, e2)
+            @test manifold !== nothing
+        end
+
+        @testset "ConvexHull vs ConvexHull no collision" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            e1 = create_entity_id()
+            add_component!(e1, transform(position=Vec3d(0, 0, 0)))
+            add_component!(e1, ColliderComponent(shape=ConvexHullShape([
+                Vec3f(0, 1, 0), Vec3f(-1, -1, 0), Vec3f(1, -1, 0), Vec3f(0, 0, -1)
+            ])))
+
+            e2 = create_entity_id()
+            add_component!(e2, transform(position=Vec3d(10, 0, 0)))
+            add_component!(e2, ColliderComponent(shape=ConvexHullShape([
+                Vec3f(0, 1, 0), Vec3f(-1, -1, 0), Vec3f(1, -1, 0), Vec3f(0, 0, -1)
+            ])))
+
+            manifold = OpenReality.collide(e1, e2)
+            @test manifold === nothing
+        end
+
+        @testset "GJK support functions" begin
+            # Sphere support should be center + radius * direction
+            s = OpenReality.gjk_support(SphereShape(1.0f0), Vec3d(0, 0, 0),
+                            Quaterniond(1, 0, 0, 0), Vec3d(1, 1, 1), Vec3f(0, 0, 0),
+                            Vec3d(1, 0, 0))
+            @test s[1] ≈ 1.0 atol=1e-10
+
+            # AABB support along +X should give +half_extent
+            s2 = OpenReality.gjk_support(AABBShape(Vec3f(2, 1, 1)), Vec3d(0, 0, 0),
+                             Quaterniond(1, 0, 0, 0), Vec3d(1, 1, 1), Vec3f(0, 0, 0),
+                             Vec3d(1, 0, 0))
+            @test s2[1] ≈ 2.0 atol=1e-10
+        end
+    end
+
+    @testset "Physics — Raycasting" begin
+        @testset "Raycast hits sphere" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            e1 = create_entity_id()
+            add_component!(e1, transform(position=Vec3d(0, 0, -5)))
+            add_component!(e1, ColliderComponent(shape=SphereShape(1.0f0)))
+
+            hit = raycast(Vec3d(0, 0, 0), Vec3d(0, 0, -1), max_distance=20.0)
+            @test hit !== nothing
+            @test hit.entity == e1
+            @test hit.distance ≈ 4.0 atol=0.1  # distance to sphere surface
+            @test hit.normal[3] > 0  # normal points toward ray origin
+        end
+
+        @testset "Raycast hits AABB" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            e1 = create_entity_id()
+            add_component!(e1, transform(position=Vec3d(0, -2, 0)))
+            add_component!(e1, ColliderComponent(shape=AABBShape(Vec3f(10, 0.5, 10))))
+
+            hit = raycast(Vec3d(0, 5, 0), Vec3d(0, -1, 0), max_distance=20.0)
+            @test hit !== nothing
+            @test hit.entity == e1
+            @test hit.point[2] ≈ -1.5 atol=0.1  # top surface of AABB
+        end
+
+        @testset "Raycast misses" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            e1 = create_entity_id()
+            add_component!(e1, transform(position=Vec3d(10, 0, 0)))
+            add_component!(e1, ColliderComponent(shape=SphereShape(1.0f0)))
+
+            hit = raycast(Vec3d(0, 0, 0), Vec3d(0, 0, -1), max_distance=20.0)
+            @test hit === nothing
+        end
+
+        @testset "Raycast hits capsule" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            e1 = create_entity_id()
+            add_component!(e1, transform(position=Vec3d(0, 0, -5)))
+            add_component!(e1, ColliderComponent(shape=CapsuleShape(radius=0.5f0, half_height=1.0f0)))
+
+            hit = raycast(Vec3d(0, 0, 0), Vec3d(0, 0, -1), max_distance=20.0)
+            @test hit !== nothing
+            @test hit.entity == e1
+        end
+
+        @testset "Raycast skips triggers" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            e1 = create_entity_id()
+            add_component!(e1, transform(position=Vec3d(0, 0, -3)))
+            add_component!(e1, ColliderComponent(shape=SphereShape(1.0f0), is_trigger=true))
+
+            hit = raycast(Vec3d(0, 0, 0), Vec3d(0, 0, -1), max_distance=20.0)
+            @test hit === nothing
+        end
+
+        @testset "raycast_all returns sorted hits" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            e1 = create_entity_id()
+            add_component!(e1, transform(position=Vec3d(0, 0, -3)))
+            add_component!(e1, ColliderComponent(shape=SphereShape(0.5f0)))
+
+            e2 = create_entity_id()
+            add_component!(e2, transform(position=Vec3d(0, 0, -8)))
+            add_component!(e2, ColliderComponent(shape=SphereShape(0.5f0)))
+
+            hits = raycast_all(Vec3d(0, 0, 0), Vec3d(0, 0, -1), max_distance=20.0)
+            @test length(hits) == 2
+            @test hits[1].distance < hits[2].distance
+            @test hits[1].entity == e1
+            @test hits[2].entity == e2
+        end
+    end
+
+    @testset "Physics — CCD" begin
+        @testset "Sweep test detects collision" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            # Static wall close to origin
+            wall_id = create_entity_id()
+            add_component!(wall_id, transform(position=Vec3d(1, 0, 0)))
+            add_component!(wall_id, ColliderComponent(shape=AABBShape(Vec3f(0.1, 2, 2))))
+
+            # Fast-moving sphere
+            bullet_id = create_entity_id()
+            add_component!(bullet_id, transform(position=Vec3d(0, 0, 0)))
+            add_component!(bullet_id, ColliderComponent(shape=SphereShape(0.2f0)))
+            add_component!(bullet_id, RigidBodyComponent(body_type=BODY_DYNAMIC, mass=0.5))
+
+            # velocity=500, dt=1/60 → travel_distance=8.33, wall at x=1 is within range
+            result = OpenReality.sweep_test(bullet_id, Vec3d(500, 0, 0), 1.0/60.0)
+            @test result !== nothing
+        end
+
+        @testset "CCD mode enum" begin
+            @test CCD_NONE isa OpenReality.CCDMode
+            @test CCD_SWEPT isa OpenReality.CCDMode
+        end
+    end
+
+    @testset "Physics — Constraints" begin
+        @testset "BallSocketJoint construction" begin
+            j = BallSocketJoint(EntityID(1), EntityID(2),
+                                local_anchor_a=Vec3d(0, 1, 0),
+                                local_anchor_b=Vec3d(0, -1, 0))
+            @test j.entity_a == EntityID(1)
+            @test j.entity_b == EntityID(2)
+            @test j.local_anchor_a == Vec3d(0, 1, 0)
+            @test j.local_anchor_b == Vec3d(0, -1, 0)
+        end
+
+        @testset "DistanceJoint construction" begin
+            j = DistanceJoint(EntityID(1), EntityID(2), target_distance=3.0)
+            @test j.target_distance == 3.0
+            @test j.entity_a == EntityID(1)
+        end
+
+        @testset "HingeJoint construction" begin
+            j = HingeJoint(EntityID(1), EntityID(2),
+                           axis=Vec3d(0, 0, 1), lower_limit=-π/4, upper_limit=π/4)
+            @test j.axis == Vec3d(0, 0, 1)
+            @test j.lower_limit ≈ -π/4
+            @test j.upper_limit ≈ π/4
+        end
+
+        @testset "FixedJoint construction" begin
+            j = FixedJoint(EntityID(1), EntityID(2),
+                           local_anchor_a=Vec3d(1, 0, 0), local_anchor_b=Vec3d(-1, 0, 0))
+            @test j.local_anchor_a == Vec3d(1, 0, 0)
+        end
+
+        @testset "SliderJoint construction" begin
+            j = SliderJoint(EntityID(1), EntityID(2),
+                            axis=Vec3d(0, 1, 0), lower_limit=0.0, upper_limit=5.0)
+            @test j.axis == Vec3d(0, 1, 0)
+            @test j.upper_limit == 5.0
+        end
+
+        @testset "JointComponent wraps constraint" begin
+            j = BallSocketJoint(EntityID(1), EntityID(2))
+            jc = JointComponent(j)
+            @test jc.joint isa BallSocketJoint
+            @test jc isa Component
+        end
+
+        @testset "Ball-socket joint constrains pendulum" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+            reset_physics_world!()
+
+            # Static anchor
+            anchor = create_entity_id()
+            add_component!(anchor, transform(position=Vec3d(0, 5, 0)))
+            add_component!(anchor, ColliderComponent(shape=SphereShape(0.1f0)))
+            add_component!(anchor, RigidBodyComponent(body_type=BODY_STATIC))
+
+            # Dynamic bob
+            bob = create_entity_id()
+            add_component!(bob, transform(position=Vec3d(0, 3, 0)))
+            add_component!(bob, ColliderComponent(shape=SphereShape(0.3f0)))
+            add_component!(bob, RigidBodyComponent(body_type=BODY_DYNAMIC, mass=1.0,
+                                                    velocity=Vec3d(2, 0, 0)))
+
+            add_component!(bob, JointComponent(
+                BallSocketJoint(anchor, bob,
+                                local_anchor_a=Vec3d(0, 0, 0),
+                                local_anchor_b=Vec3d(0, 2, 0))
+            ))
+
+            # Run several physics steps
+            for _ in 1:50
+                update_physics!(1.0 / 60.0)
+            end
+
+            # Bob should still be roughly 2 units from anchor (joint distance)
+            bob_tc = get_component(bob, TransformComponent)
+            anchor_tc = get_component(anchor, TransformComponent)
+            dist = sqrt(sum((bob_tc.position[] - anchor_tc.position[]) .^ 2))
+            @test dist ≈ 2.0 atol=0.5  # approximate due to solver convergence
+        end
+    end
+
+    @testset "Physics — Triggers" begin
+        @testset "TriggerComponent defaults" begin
+            tc = TriggerComponent()
+            @test tc.on_enter === nothing
+            @test tc.on_stay === nothing
+            @test tc.on_exit === nothing
+        end
+
+        @testset "TriggerComponent with callbacks" begin
+            entered = Ref(false)
+            tc = TriggerComponent(
+                on_enter = (t, o) -> (entered[] = true),
+                on_stay = nothing,
+                on_exit = nothing
+            )
+            @test tc.on_enter !== nothing
+            tc.on_enter(EntityID(1), EntityID(2))
+            @test entered[] == true
+        end
+
+        @testset "TriggerComponent is Component" begin
+            @test TriggerComponent <: Component
+        end
+
+        @testset "Trigger enter/exit detection" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+            reset_physics_world!()
+            OpenReality.reset_trigger_state!()
+
+            # Trigger zone at origin
+            trigger_eid = create_entity_id()
+            add_component!(trigger_eid, transform(position=Vec3d(0, 0, 0)))
+            add_component!(trigger_eid, ColliderComponent(
+                shape=AABBShape(Vec3f(2, 2, 2)), is_trigger=true
+            ))
+
+            enter_log = EntityID[]
+            exit_log = EntityID[]
+            add_component!(trigger_eid, TriggerComponent(
+                on_enter = (t, o) -> push!(enter_log, o),
+                on_exit = (t, o) -> push!(exit_log, o)
+            ))
+
+            # Object inside trigger zone
+            obj_eid = create_entity_id()
+            add_component!(obj_eid, transform(position=Vec3d(0, 0, 0)))
+            add_component!(obj_eid, ColliderComponent(shape=SphereShape(0.5f0)))
+
+            # First update: should trigger on_enter
+            OpenReality.update_triggers!()
+            @test length(enter_log) == 1
+            @test enter_log[1] == obj_eid
+
+            # Second update: same overlap, no new enter
+            OpenReality.update_triggers!()
+            @test length(enter_log) == 1  # no duplicate
+
+            # Move object out of trigger zone
+            obj_tc = get_component(obj_eid, TransformComponent)
+            obj_tc.position[] = Vec3d(100, 0, 0)
+
+            OpenReality.update_triggers!()
+            @test length(exit_log) == 1
+            @test exit_log[1] == obj_eid
+        end
+    end
+
+    @testset "Physics — Islands and Sleeping" begin
+        @testset "SimulationIsland struct" begin
+            island = OpenReality.SimulationIsland([EntityID(1), EntityID(2)])
+            @test length(island.entities) == 2
+        end
+
+        @testset "build_islands groups connected bodies" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            # Two dynamic bodies with a contact manifold between them
+            e1 = create_entity_id()
+            add_component!(e1, transform(position=Vec3d(0, 0, 0)))
+            add_component!(e1, ColliderComponent(shape=SphereShape(1.0f0)))
+            add_component!(e1, RigidBodyComponent(body_type=BODY_DYNAMIC))
+
+            e2 = create_entity_id()
+            add_component!(e2, transform(position=Vec3d(1, 0, 0)))
+            add_component!(e2, ColliderComponent(shape=SphereShape(1.0f0)))
+            add_component!(e2, RigidBodyComponent(body_type=BODY_DYNAMIC))
+
+            # Isolated body
+            e3 = create_entity_id()
+            add_component!(e3, transform(position=Vec3d(100, 0, 0)))
+            add_component!(e3, ColliderComponent(shape=SphereShape(1.0f0)))
+            add_component!(e3, RigidBodyComponent(body_type=BODY_DYNAMIC))
+
+            manifolds = [OpenReality.ContactManifold(e1, e2, Vec3d(1, 0, 0))]
+            constraints = OpenReality.JointConstraint[]
+
+            islands = OpenReality.build_islands(manifolds, constraints)
+            # Should have 2 islands: one with e1+e2, one with e3
+            @test length(islands) == 2
+            sizes = sort([length(i.entities) for i in islands])
+            @test sizes == [1, 2]
+        end
+
+        @testset "PhysicsWorldConfig sleep fields" begin
+            config = OpenReality.PhysicsWorldConfig()
+            @test config.sleep_linear_threshold == 0.01
+            @test config.sleep_angular_threshold == 0.05
+            @test config.sleep_time == 0.5
+        end
+    end
+
+    @testset "Physics — Compound Shapes" begin
+        @testset "CompoundShape vs AABB collision" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            e1 = create_entity_id()
+            add_component!(e1, transform(position=Vec3d(0, 0, 0)))
+            add_component!(e1, ColliderComponent(shape=CompoundShape([
+                CompoundChild(AABBShape(Vec3f(0.5, 0.25, 0.25)), position=Vec3d(0, 0.25, 0)),
+                CompoundChild(AABBShape(Vec3f(0.25, 0.5, 0.25)), position=Vec3d(-0.25, -0.25, 0))
+            ])))
+
+            e2 = create_entity_id()
+            add_component!(e2, transform(position=Vec3d(0.5, 0.25, 0)))
+            add_component!(e2, ColliderComponent(shape=AABBShape(Vec3f(0.5, 0.5, 0.5))))
+
+            manifold = OpenReality.collide(e1, e2)
+            @test manifold !== nothing
+        end
+
+        @testset "CompoundShape vs Sphere collision" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            e1 = create_entity_id()
+            add_component!(e1, transform(position=Vec3d(0, 0, 0)))
+            add_component!(e1, ColliderComponent(shape=CompoundShape([
+                CompoundChild(SphereShape(0.5f0), position=Vec3d(0, 0, 0))
+            ])))
+
+            e2 = create_entity_id()
+            add_component!(e2, transform(position=Vec3d(0.8, 0, 0)))
+            add_component!(e2, ColliderComponent(shape=SphereShape(0.5f0)))
+
+            manifold = OpenReality.collide(e1, e2)
+            @test manifold !== nothing
+        end
+
+        @testset "CompoundShape no collision when distant" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            e1 = create_entity_id()
+            add_component!(e1, transform(position=Vec3d(0, 0, 0)))
+            add_component!(e1, ColliderComponent(shape=CompoundShape([
+                CompoundChild(AABBShape(Vec3f(0.5, 0.5, 0.5)), position=Vec3d(0, 0, 0))
+            ])))
+
+            e2 = create_entity_id()
+            add_component!(e2, transform(position=Vec3d(100, 0, 0)))
+            add_component!(e2, ColliderComponent(shape=SphereShape(0.5f0)))
+
+            manifold = OpenReality.collide(e1, e2)
+            @test manifold === nothing
+        end
+
+        @testset "CompoundShape inertia computation" begin
+            cs = CompoundShape([
+                CompoundChild(AABBShape(Vec3f(0.5, 0.5, 0.5)), position=Vec3d(1, 0, 0)),
+                CompoundChild(AABBShape(Vec3f(0.5, 0.5, 0.5)), position=Vec3d(-1, 0, 0))
+            ])
+            inv_I = OpenReality.compute_inverse_inertia(cs, 2.0, Vec3d(1, 1, 1))
+            # Inverse inertia should be non-zero for positive mass
+            @test inv_I[1, 1] > 0
+            @test inv_I[2, 2] > 0
+            @test inv_I[3, 3] > 0
+        end
+    end
+
+    @testset "Physics — Inertia" begin
+        @testset "Sphere inertia" begin
+            inv_I = OpenReality.compute_inverse_inertia(SphereShape(1.0f0), 1.0, Vec3d(1, 1, 1))
+            # I = 2/5 * m * r² = 0.4, inv = 2.5
+            @test inv_I[1, 1] ≈ 2.5 atol=1e-10
+            @test inv_I[2, 2] ≈ 2.5 atol=1e-10
+            @test inv_I[3, 3] ≈ 2.5 atol=1e-10
+        end
+
+        @testset "Box inertia" begin
+            inv_I = OpenReality.compute_inverse_inertia(AABBShape(Vec3f(0.5, 0.5, 0.5)), 1.0, Vec3d(1, 1, 1))
+            # Full width 1.0 on each axis. I_xx = 1/12 * m * (h² + d²) = 1/12 * (1+1) = 1/6
+            @test inv_I[1, 1] ≈ 6.0 atol=1e-10
+        end
+
+        @testset "Zero mass returns zero inertia" begin
+            inv_I = OpenReality.compute_inverse_inertia(SphereShape(1.0f0), 0.0, Vec3d(1, 1, 1))
+            @test inv_I == OpenReality.ZERO_MAT3D
+        end
+
+        @testset "Capsule inertia" begin
+            inv_I = OpenReality.compute_inverse_inertia(
+                CapsuleShape(radius=0.5f0, half_height=1.0f0), 1.0, Vec3d(1, 1, 1)
+            )
+            @test inv_I[1, 1] > 0
+            @test inv_I[2, 2] > 0
+            # For Y-axis capsule, I_yy should be smaller (less resistance to rotation around long axis)
+            @test inv_I[2, 2] > inv_I[1, 1]  # inv is larger = easier to rotate
+        end
+    end
+
+    @testset "Physics — Solver integration" begin
+        @testset "Dynamic body falls under gravity" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+            reset_physics_world!()
+
+            e1 = create_entity_id()
+            add_component!(e1, transform(position=Vec3d(0, 10, 0)))
+            add_component!(e1, ColliderComponent(shape=SphereShape(0.5f0)))
+            add_component!(e1, RigidBodyComponent(body_type=BODY_DYNAMIC, mass=1.0))
+
+            for _ in 1:10
+                update_physics!(1.0 / 60.0)
+            end
+
+            tc = get_component(e1, TransformComponent)
+            @test tc.position[][2] < 10.0  # should have fallen
+        end
+
+        @testset "Static body does not move" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+            reset_physics_world!()
+
+            e1 = create_entity_id()
+            add_component!(e1, transform(position=Vec3d(0, 5, 0)))
+            add_component!(e1, ColliderComponent(shape=AABBShape(Vec3f(1, 1, 1))))
+            add_component!(e1, RigidBodyComponent(body_type=BODY_STATIC))
+
+            for _ in 1:10
+                update_physics!(1.0 / 60.0)
+            end
+
+            tc = get_component(e1, TransformComponent)
+            @test tc.position[][2] ≈ 5.0 atol=1e-10  # unchanged
+        end
+
+        @testset "Restitution: bouncy ball bounces higher" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+            reset_physics_world!()
+
+            # Floor
+            floor_id = create_entity_id()
+            add_component!(floor_id, transform(position=Vec3d(0, -0.5, 0)))
+            add_component!(floor_id, ColliderComponent(shape=AABBShape(Vec3f(10, 0.5, 10))))
+            add_component!(floor_id, RigidBodyComponent(body_type=BODY_STATIC))
+
+            # Low-bounce ball
+            b1 = create_entity_id()
+            add_component!(b1, transform(position=Vec3d(-2, 3, 0)))
+            add_component!(b1, ColliderComponent(shape=SphereShape(0.3f0)))
+            add_component!(b1, RigidBodyComponent(body_type=BODY_DYNAMIC, mass=1.0, restitution=0.1f0))
+
+            # High-bounce ball
+            b2 = create_entity_id()
+            add_component!(b2, transform(position=Vec3d(2, 3, 0)))
+            add_component!(b2, ColliderComponent(shape=SphereShape(0.3f0)))
+            add_component!(b2, RigidBodyComponent(body_type=BODY_DYNAMIC, mass=1.0, restitution=0.9f0))
+
+            # Run physics until after first bounce
+            for _ in 1:200
+                update_physics!(1.0 / 60.0)
+            end
+
+            rb1 = get_component(b1, RigidBodyComponent)
+            rb2 = get_component(b2, RigidBodyComponent)
+            # Both should not have fallen through
+            tc1 = get_component(b1, TransformComponent)
+            tc2 = get_component(b2, TransformComponent)
+            @test tc1.position[][2] >= -0.5
+            @test tc2.position[][2] >= -0.5
+        end
+
+        @testset "PhysicsWorldConfig defaults" begin
+            config = OpenReality.PhysicsWorldConfig()
+            @test config.gravity == Vec3d(0, -9.81, 0)
+            @test config.fixed_dt ≈ 1.0 / 120.0
+            @test config.max_substeps == 8
+            @test config.solver_iterations == 10
+            @test config.position_correction == 0.2
+            @test config.slop == 0.005
+        end
+
+        @testset "Contact cache warm-starting" begin
+            cache = OpenReality.ContactCache()
+            @test isempty(cache.manifolds)
+
+            # Create a manifold with accumulated impulse
+            m = OpenReality.ContactManifold(EntityID(1), EntityID(2), Vec3d(0, 1, 0))
+            cp = OpenReality.ContactPoint(Vec3d(0, 0, 0), Vec3d(0, 1, 0), 0.1)
+            cp.normal_impulse = 5.0
+            push!(m.points, cp)
+
+            OpenReality.update_cache!(cache, [m])
+            @test length(cache.manifolds) == 1
+        end
+    end
+
+    @testset "Physics — RigidBody fields" begin
+        @testset "RigidBodyComponent new fields" begin
+            rb = RigidBodyComponent()
+            @test rb.angular_velocity == Vec3d(0, 0, 0)
+            @test rb.friction == 0.5
+            @test rb.linear_damping == 0.01
+            @test rb.angular_damping == 0.05
+            @test rb.sleeping == false
+            @test rb.sleep_timer == 0.0
+            @test rb.ccd_mode == CCD_NONE
+        end
+
+        @testset "RigidBodyComponent custom construction" begin
+            rb = RigidBodyComponent(
+                body_type=BODY_DYNAMIC,
+                velocity=Vec3d(1, 2, 3),
+                angular_velocity=Vec3d(0.1, 0.2, 0.3),
+                mass=5.0,
+                restitution=0.8f0,
+                friction=0.7,
+                linear_damping=0.02,
+                angular_damping=0.1,
+                ccd_mode=CCD_SWEPT
+            )
+            @test rb.velocity == Vec3d(1, 2, 3)
+            @test rb.angular_velocity == Vec3d(0.1, 0.2, 0.3)
+            @test rb.mass == 5.0
+            @test rb.inv_mass ≈ 0.2 atol=1e-10
+            @test rb.friction == 0.7
+            @test rb.ccd_mode == CCD_SWEPT
+        end
+    end
+
+    @testset "Backend" begin
+        @testset "OpenGL Backend" begin
+            backend = OpenGLBackend()
+            @test !backend.initialized
+
+            initialize!(backend)
+            @test backend.initialized
+
+            shutdown!(backend)
+            @test !backend.initialized
+        end
+
+        if Sys.isapple()
+            @testset "Metal Backend" begin
+                backend = MetalBackend()
+                @test !backend.initialized
+
+                initialize!(backend)
+                @test backend.initialized
+
+                shutdown!(backend)
+                @test !backend.initialized
+            end
+        end
+
+        if !Sys.isapple()
+            @testset "Vulkan Backend" begin
+                backend = VulkanBackend()
+                @test !backend.initialized
+
+                initialize!(backend)
+                @test backend.initialized
+
+                shutdown!(backend)
+                @test !backend.initialized
+            end
+        end
+    end
+
     @testset "Model Loading" begin
         @testset "load_model dispatches by extension" begin
             # Test that unsupported extensions throw
@@ -1211,17 +2145,6 @@ using LinearAlgebra
             @test pp.quad_vao == UInt32(0)
             @test pp.composite_shader === nothing
         end
-    end
-
-    @testset "Backend" begin
-        backend = OpenGLBackend()
-        @test !backend.initialized
-
-        initialize!(backend)
-        @test backend.initialized
-
-        shutdown!(backend)
-        @test !backend.initialized
     end
 
     @testset "Windowing" begin

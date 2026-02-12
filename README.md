@@ -21,7 +21,11 @@ OpenReality provides AAA-quality rendering with a clean functional API. Define s
 - Entity Component System with O(1) component operations
 - Immutable, functional scene graph
 - Three rendering backends: OpenGL, Metal (macOS), Vulkan (Linux/Windows)
-- AABB and sphere collision detection with gravity
+- Full-featured impulse-based physics engine (PGS solver with warm-starting)
+- 6 collider shapes: AABB, Sphere, Capsule, OBB, ConvexHull, Compound
+- Joint constraints: ball-socket, distance, hinge, fixed, slider
+- Spatial hash broadphase, GJK+EPA narrowphase, raycasting, CCD
+- Trigger volumes, island-based sleeping, friction and restitution
 - Keyframe animation with step, linear, and cubic spline interpolation
 - glTF 2.0 and OBJ model loading
 - Built-in FPS player controller

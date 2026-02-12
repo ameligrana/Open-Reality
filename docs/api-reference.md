@@ -315,15 +315,28 @@ Marks an entity as the player for FPS controls. Typically created via `create_pl
 ```julia
 ColliderComponent(;
     shape::ColliderShape = AABBShape(Vec3f(0.5, 0.5, 0.5)),
-    offset::Vec3f = Vec3f(0, 0, 0)
+    offset::Vec3f = Vec3f(0, 0, 0),
+    is_trigger::Bool = false
 )
 ```
 
-Attaches a collision shape to an entity. The shape is defined in local space; the physics system positions it using the entity's world transform.
+Attaches a collision shape to an entity. The shape is defined in local space; the physics system positions it using the entity's world transform. Set `is_trigger=true` to make the collider generate trigger events instead of contact forces.
 
 **Shapes:**
 - `AABBShape(half_extents::Vec3f)` — axis-aligned bounding box
 - `SphereShape(radius::Float32)` — sphere
+- `CapsuleShape(; radius, half_height, axis)` — cylinder with hemispherical caps
+- `OBBShape(half_extents::Vec3f)` — oriented bounding box (uses entity rotation)
+- `ConvexHullShape(vertices::Vector{Vec3f})` — arbitrary convex hull
+- `CompoundShape(children::Vector{CompoundChild})` — multi-shape collider
+
+**CompoundChild:**
+```julia
+CompoundChild(shape::ColliderShape; position::Vec3d=Vec3d(0,0,0), rotation::Quaterniond=Quaterniond(1,0,0,0))
+```
+
+**CapsuleAxis enum:**
+- `CAPSULE_X`, `CAPSULE_Y` (default), `CAPSULE_Z`
 
 **Helper functions:**
 - `collider_from_mesh(mesh::MeshComponent) -> ColliderComponent` — auto-generates an AABB from mesh bounds
@@ -337,24 +350,118 @@ Attaches a collision shape to an entity. The shape is defined in local space; th
 RigidBodyComponent(;
     body_type::BodyType = BODY_DYNAMIC,
     velocity::Vec3d = Vec3d(0, 0, 0),
+    angular_velocity::Vec3d = Vec3d(0, 0, 0),
     mass::Float64 = 1.0,
     restitution::Float32 = 0.0f0,
-    grounded::Bool = false
+    friction::Float64 = 0.5,
+    linear_damping::Float64 = 0.01,
+    angular_damping::Float64 = 0.05,
+    grounded::Bool = false,
+    sleeping::Bool = false,
+    ccd_mode::CCDMode = CCD_NONE
 )
 ```
 
 | Field | Default | Description |
 |-------|---------|-------------|
 | `body_type` | `BODY_DYNAMIC` | How the entity participates in physics |
-| `velocity` | `Vec3d(0,0,0)` | Current velocity |
+| `velocity` | `Vec3d(0,0,0)` | Linear velocity (m/s) |
+| `angular_velocity` | `Vec3d(0,0,0)` | Angular velocity (rad/s) |
 | `mass` | `1.0` | Mass in kg |
 | `restitution` | `0.0` | Bounciness (0 = no bounce, 1 = perfectly elastic) |
-| `grounded` | `false` | Whether the entity is currently on the ground |
+| `friction` | `0.5` | Friction coefficient |
+| `linear_damping` | `0.01` | Linear velocity damping per second |
+| `angular_damping` | `0.05` | Angular velocity damping per second |
+| `grounded` | `false` | Whether the entity is on a surface (set by physics) |
+| `sleeping` | `false` | Whether the body is asleep (not simulated) |
+| `ccd_mode` | `CCD_NONE` | Continuous collision detection mode |
 
 **Body types (`BodyType` enum):**
 - `BODY_STATIC` — never moves (walls, floors, terrain)
 - `BODY_KINEMATIC` — moved by code, not by physics forces (player controller)
 - `BODY_DYNAMIC` — affected by gravity and collision response
+
+**CCD modes (`CCDMode` enum):**
+- `CCD_NONE` — discrete collision detection (default)
+- `CCD_SWEPT` — swept collision test prevents tunneling through thin objects
+
+---
+
+### `JointComponent`
+
+```julia
+JointComponent(joint::JointConstraint)
+```
+
+Attaches a joint constraint to an entity. The joint connects two entities at anchor points.
+
+**Joint types:**
+
+```julia
+BallSocketJoint(entity_a, entity_b; local_anchor_a=Vec3d(0,0,0), local_anchor_b=Vec3d(0,0,0))
+DistanceJoint(entity_a, entity_b; target_distance=1.0, local_anchor_a=Vec3d(0,0,0), local_anchor_b=Vec3d(0,0,0))
+HingeJoint(entity_a, entity_b; axis=Vec3d(0,1,0), lower_limit=NaN, upper_limit=NaN)
+FixedJoint(entity_a, entity_b; local_anchor_a=Vec3d(0,0,0), local_anchor_b=Vec3d(0,0,0))
+SliderJoint(entity_a, entity_b; axis=Vec3d(1,0,0), lower_limit=NaN, upper_limit=NaN)
+```
+
+---
+
+### `TriggerComponent`
+
+```julia
+TriggerComponent(;
+    on_enter::Union{Function, Nothing} = nothing,
+    on_stay::Union{Function, Nothing} = nothing,
+    on_exit::Union{Function, Nothing} = nothing
+)
+```
+
+Makes a collider act as a trigger volume. The entity must also have a `ColliderComponent` with `is_trigger=true`. Callbacks receive `(trigger_entity_id, other_entity_id)`.
+
+---
+
+## Physics Functions
+
+### `raycast`
+
+```julia
+raycast(origin::Vec3d, direction::Vec3d; max_distance::Float64=Inf) -> Union{RaycastHit, Nothing}
+```
+
+Cast a ray and return the closest hit. Returns a `RaycastHit` with fields: `entity`, `point`, `normal`, `distance`.
+
+### `raycast_all`
+
+```julia
+raycast_all(origin::Vec3d, direction::Vec3d; max_distance::Float64=Inf) -> Vector{RaycastHit}
+```
+
+Cast a ray and return all hits sorted by distance.
+
+### `PhysicsWorldConfig`
+
+```julia
+PhysicsWorldConfig(;
+    gravity::Vec3d = Vec3d(0, -9.81, 0),
+    fixed_dt::Float64 = 1/120,
+    max_substeps::Int = 8,
+    solver_iterations::Int = 10,
+    position_correction::Float64 = 0.2,
+    slop::Float64 = 0.005,
+    sleep_linear_threshold::Float64 = 0.01,
+    sleep_angular_threshold::Float64 = 0.05,
+    sleep_time::Float64 = 0.5
+)
+```
+
+### `reset_physics_world!`
+
+```julia
+reset_physics_world!()
+```
+
+Reset the physics world singleton. Call this alongside `reset_entity_counter!()` and `reset_component_stores!()` when starting a fresh scene.
 
 ---
 

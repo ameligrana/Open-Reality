@@ -225,16 +225,79 @@ Linux/Windows, uses Vulkan.jl bindings. Includes device selection, memory manage
 
 ## Physics System
 
-**File:** `src/systems/physics.jl`
+**Directory:** `src/physics/`
 
-Simple collision detection and response:
+A full-featured impulse-based physics engine, pure Julia, no external dependencies.
 
-1. **Broadphase**: Compute world-space AABBs for all entities with colliders. Test all pairs for AABB overlap.
-2. **Narrowphase**: For overlapping pairs, compute exact penetration depth and collision normal. Supports AABB-AABB, AABB-Sphere, and Sphere-Sphere pairs.
-3. **Response**: Separate overlapping bodies along the collision normal. Adjust velocities based on restitution.
-4. **Integration**: Apply gravity to dynamic bodies, integrate velocity into position.
+### Architecture
 
-Default gravity: `(0, -9.81, 0)` m/s.
+```
+types.jl          Core types: PhysicsWorldConfig, ContactPoint, ContactManifold, AABB3D
+shapes.jl         Shape definitions + AABB computation + GJK support functions
+inertia.jl        Per-shape inertia tensor computation (box, sphere, capsule, compound)
+broadphase.jl     Spatial hash grid broadphase (O(n) pair generation)
+narrowphase.jl    Shape-pair collision tests (SAT, closest-point, GJK+EPA dispatch)
+gjk_epa.jl        GJK overlap test + EPA penetration depth for convex-convex pairs
+contact.jl        Manifold caching + warm-starting + manifold reduction (max 4 points)
+solver.jl         Sequential impulse solver (PGS) with Coulomb friction
+constraints.jl    Joint constraints: ball-socket, distance, hinge, fixed, slider
+triggers.jl       Trigger volumes with enter/stay/exit callbacks
+raycast.jl        Ray-shape intersection tests + world raycast query
+ccd.jl            Continuous collision detection (swept sphere/capsule + AABB binary search)
+islands.jl        Union-find simulation islands for sleeping optimization
+world.jl          PhysicsWorld orchestrator: fixed timestep sub-stepping
+```
+
+### Per-Step Pipeline
+
+```
+1. Update inertia tensors (local → world space via R · I⁻¹ · Rᵀ)
+2. Apply gravity + damping to dynamic bodies
+3. Broadphase: insert AABBs into spatial hash grid → candidate pairs
+4. Narrowphase: shape-pair tests → ContactManifold list
+5. Update contact cache (warm-starting from previous frame)
+6. Solve velocity constraints:
+   a. Prepare solver bodies (cache ECS data)
+   b. Pre-step: effective mass, Baumgarte bias, restitution bias
+   c. Warm-start: apply cached impulses
+   d. Iterate (10 PGS iterations):
+      - Contact normal impulse (non-penetration)
+      - Coulomb friction (2 tangent directions)
+      - Joint constraints (interleaved)
+7. Write back velocities to ECS
+8. CCD: swept tests for fast-moving bodies
+9. Integrate positions + quaternion angular integration
+10. Update grounded flags from contact normals
+11. Trigger detection (AABB broadphase + narrowphase → callbacks)
+12. Island-based sleeping (union-find connected components)
+```
+
+### Collider Shapes
+
+| Shape | Description | Narrowphase |
+|-------|-------------|-------------|
+| `AABBShape` | Axis-aligned box | SAT (3 axes) |
+| `SphereShape` | Sphere | Analytic |
+| `CapsuleShape` | Cylinder + hemisphere caps | Closest-point on segment |
+| `OBBShape` | Oriented bounding box | GJK + EPA |
+| `ConvexHullShape` | Arbitrary convex hull | GJK + EPA |
+| `CompoundShape` | Multi-child collider | Per-child dispatch |
+
+### Solver
+
+The solver uses **Projected Gauss-Seidel (PGS)** with:
+- **Warm-starting**: Accumulated impulses from the previous frame bootstrap convergence
+- **Baumgarte stabilization**: Velocity bias corrects position errors (factor=0.2, slop=0.005)
+- **Coulomb friction**: Two tangent impulses clamped to friction cone
+- **Split impulse**: Position correction separated from velocity correction
+
+Fixed timestep: 1/120s, max 8 substeps per frame, 10 solver iterations.
+
+### Sleeping
+
+Bodies below velocity thresholds accumulate sleep time. When all bodies in a simulation island (connected by contacts or joints) exceed the timer, the island sleeps. External forces or new contacts wake islands.
+
+Default gravity: `(0, -9.81, 0)` m/s².
 
 ---
 
@@ -277,7 +340,7 @@ src/
 │   ├── camera.jl               # CameraComponent
 │   ├── lights.jl               # PointLight, DirectionalLight, IBL
 │   ├── collider.jl             # ColliderComponent, AABBShape, SphereShape
-│   ├── rigidbody.jl            # RigidBodyComponent, BodyType
+│   ├── rigidbody.jl            # RigidBodyComponent, BodyType, CCDMode
 │   ├── animation.jl            # AnimationComponent, AnimationClip
 │   ├── primitives.jl           # cube_mesh, sphere_mesh, plane_mesh
 │   └── player.jl               # PlayerComponent, create_player
@@ -289,8 +352,24 @@ src/
 │   ├── glfw.jl                 # GLFW window management
 │   └── input.jl                # InputState (keyboard, mouse)
 │
+├── physics/
+│   ├── types.jl                # PhysicsWorldConfig, ContactPoint, ContactManifold
+│   ├── shapes.jl               # Shape AABB + GJK support functions
+│   ├── inertia.jl              # Inertia tensor computation
+│   ├── broadphase.jl           # Spatial hash grid
+│   ├── narrowphase.jl          # Shape-pair collision tests
+│   ├── gjk_epa.jl              # GJK + EPA for convex colliders
+│   ├── contact.jl              # Contact cache + warm-starting
+│   ├── solver.jl               # Sequential impulse solver (PGS)
+│   ├── constraints.jl          # Joint constraints
+│   ├── triggers.jl             # Trigger volumes
+│   ├── raycast.jl              # Ray-shape intersection
+│   ├── ccd.jl                  # Continuous collision detection
+│   ├── islands.jl              # Simulation islands + sleeping
+│   └── world.jl                # PhysicsWorld orchestrator
+│
 ├── systems/
-│   ├── physics.jl              # Collision detection + response
+│   ├── physics.jl              # update_physics!(dt) API (delegates to PhysicsWorld)
 │   ├── animation.jl            # Animation update loop
 │   └── player_controller.jl    # FPS input handling
 │
@@ -325,6 +404,7 @@ examples/
 ├── basic_scene.jl              # Simple PBR scene
 ├── pbr_showcase.jl             # Advanced materials + post-processing
 ├── boulder_scene.jl            # Primitives showcase
+├── physics_demo.jl             # Physics engine showcase
 ├── vulkan_test.jl              # Vulkan backend test
 ├── metal_test.jl               # Metal backend test
 └── vulkan_minimal_test.jl      # Minimal Vulkan test

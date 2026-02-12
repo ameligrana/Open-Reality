@@ -402,3 +402,158 @@ render(s, width=1920, height=1080, title="Full HD Scene")
 ```
 
 All three backends support the full feature set: deferred rendering, PBR, CSM, IBL, SSR, SSAO, TAA, and post-processing.
+
+---
+
+## Physics: Stacking Boxes with Friction
+
+```julia
+using OpenReality
+
+reset_entity_counter!()
+reset_component_stores!()
+reset_physics_world!()
+
+# Helper for dynamic boxes
+function dynamic_box(pos; size=Vec3f(0.5, 0.5, 0.5), color=RGB{Float32}(0.8, 0.3, 0.1), mass=1.0)
+    entity([
+        cube_mesh(),
+        MaterialComponent(color=color, metallic=0.2f0, roughness=0.6f0),
+        transform(position=pos),
+        ColliderComponent(shape=AABBShape(size)),
+        RigidBodyComponent(body_type=BODY_DYNAMIC, mass=mass, friction=0.5)
+    ])
+end
+
+s = scene([
+    create_player(position=Vec3d(0, 2, 8)),
+    entity([DirectionalLightComponent(direction=Vec3f(0.4, -1.0, -0.3), intensity=2.5f0)]),
+
+    # Ground
+    entity([
+        plane_mesh(width=20.0f0, depth=20.0f0),
+        MaterialComponent(color=RGB{Float32}(0.45, 0.45, 0.45), roughness=0.95f0),
+        transform(),
+        ColliderComponent(shape=AABBShape(Vec3f(10.0, 0.01, 10.0)), offset=Vec3f(0, -0.01, 0)),
+        RigidBodyComponent(body_type=BODY_STATIC)
+    ]),
+
+    # Tower of boxes — should stay stacked thanks to friction
+    dynamic_box(Vec3d(0, 0.5, 0), color=RGB{Float32}(0.9, 0.2, 0.2)),
+    dynamic_box(Vec3d(0, 1.5, 0), color=RGB{Float32}(0.8, 0.4, 0.1)),
+    dynamic_box(Vec3d(0, 2.5, 0), color=RGB{Float32}(0.7, 0.6, 0.1)),
+    dynamic_box(Vec3d(0, 3.5, 0), color=RGB{Float32}(0.5, 0.8, 0.2)),
+])
+
+render(s, post_process=PostProcessConfig(tone_mapping=TONEMAP_ACES, fxaa_enabled=true))
+```
+
+---
+
+## Physics: Joints and Constraints
+
+```julia
+using OpenReality
+
+reset_entity_counter!()
+reset_component_stores!()
+reset_physics_world!()
+
+s = scene([
+    create_player(position=Vec3d(0, 3, 10)),
+    entity([DirectionalLightComponent(direction=Vec3f(0.4, -1.0, -0.3), intensity=2.5f0)]),
+    entity([
+        plane_mesh(width=20.0f0, depth=20.0f0),
+        MaterialComponent(color=RGB{Float32}(0.4, 0.4, 0.4), roughness=0.9f0),
+        transform(),
+        ColliderComponent(shape=AABBShape(Vec3f(10.0, 0.01, 10.0)), offset=Vec3f(0, -0.01, 0)),
+        RigidBodyComponent(body_type=BODY_STATIC)
+    ])
+])
+
+# Pendulum: static anchor + dynamic bob connected by ball-socket joint
+anchor_id = create_entity_id()
+add_component!(anchor_id, transform(position=Vec3d(0, 6, 0)))
+add_component!(anchor_id, ColliderComponent(shape=SphereShape(0.1f0)))
+add_component!(anchor_id, RigidBodyComponent(body_type=BODY_STATIC))
+
+bob_id = create_entity_id()
+add_component!(bob_id, transform(position=Vec3d(0, 4, 0)))
+add_component!(bob_id, cube_mesh())
+add_component!(bob_id, MaterialComponent(color=RGB{Float32}(0.9, 0.1, 0.5)))
+add_component!(bob_id, ColliderComponent(shape=SphereShape(0.3f0)))
+add_component!(bob_id, RigidBodyComponent(body_type=BODY_DYNAMIC, mass=2.0,
+                                          velocity=Vec3d(3.0, 0.0, 0.0)))
+add_component!(bob_id, JointComponent(
+    BallSocketJoint(anchor_id, bob_id,
+                    local_anchor_a=Vec3d(0,0,0),
+                    local_anchor_b=Vec3d(0,2,0))
+))
+
+add_entity(s, anchor_id)
+add_entity(s, bob_id)
+
+render(s)
+```
+
+---
+
+## Physics: Trigger Volumes and Raycasting
+
+```julia
+using OpenReality
+
+reset_entity_counter!()
+reset_component_stores!()
+reset_physics_world!()
+
+# Setup scene...
+
+# Trigger volume: semi-transparent zone that fires callbacks
+trigger_id = create_entity_id()
+add_component!(trigger_id, transform(position=Vec3d(0, 1, 0)))
+add_component!(trigger_id, ColliderComponent(
+    shape=AABBShape(Vec3f(2.0, 2.0, 2.0)),
+    is_trigger=true
+))
+add_component!(trigger_id, cube_mesh())
+add_component!(trigger_id, MaterialComponent(
+    color=RGB{Float32}(0.0, 1.0, 0.3), opacity=0.2f0
+))
+add_component!(trigger_id, TriggerComponent(
+    on_enter = (trigger, other) -> @info("Entity $other ENTERED trigger!"),
+    on_exit  = (trigger, other) -> @info("Entity $other EXITED trigger!")
+))
+
+# Raycast: find what's below a point
+hit = raycast(Vec3d(0, 10, 0), Vec3d(0, -1, 0), max_distance=50.0)
+if hit !== nothing
+    @info "Raycast hit" entity=hit.entity point=hit.point distance=hit.distance
+end
+```
+
+---
+
+## Physics: CCD (Fast-Moving Objects)
+
+```julia
+# Thin wall
+entity([
+    cube_mesh(),
+    MaterialComponent(color=RGB{Float32}(0.4, 0.4, 0.4)),
+    transform(position=Vec3d(8, 1, 0), scale=Vec3d(0.1, 2, 2)),
+    ColliderComponent(shape=AABBShape(Vec3f(0.05, 1.0, 1.0))),
+    RigidBodyComponent(body_type=BODY_STATIC)
+])
+
+# Fast bullet with CCD — won't tunnel through the wall
+entity([
+    sphere_mesh(radius=0.15f0),
+    MaterialComponent(color=RGB{Float32}(1.0, 0.0, 0.0), metallic=0.9f0),
+    transform(position=Vec3d(4, 1, 0)),
+    ColliderComponent(shape=SphereShape(0.15f0)),
+    RigidBodyComponent(body_type=BODY_DYNAMIC, mass=0.5,
+                       ccd_mode=CCD_SWEPT,
+                       velocity=Vec3d(50.0, 0.0, 0.0))
+])
+```

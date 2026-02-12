@@ -218,7 +218,59 @@ Key concepts:
 - **`BODY_KINEMATIC`**: Moved by code (e.g. the player controller), not by forces.
 - **`BODY_DYNAMIC`**: Affected by gravity and collisions.
 - **`restitution`**: Bounciness. `0.0` = no bounce, `1.0` = perfectly elastic.
-- **`ColliderComponent`** defines the collision shape: `AABBShape(half_extents)` for boxes, `SphereShape(radius)` for spheres.
+- **`friction`**: How much objects resist sliding. Default `0.5`.
+- **`ColliderComponent`** defines the collision shape. Available shapes:
+  - `AABBShape(half_extents)` — axis-aligned box
+  - `SphereShape(radius)` — sphere
+  - `CapsuleShape(; radius, half_height, axis)` — cylinder + hemisphere caps
+  - `OBBShape(half_extents)` — oriented box (uses entity rotation)
+  - `ConvexHullShape(vertices)` — arbitrary convex shape
+  - `CompoundShape(children)` — multi-shape collider
+
+### Advanced Physics Features
+
+The physics engine also supports:
+
+**Joints** — connect two entities with constraints:
+```julia
+# Ball-socket joint (pendulum)
+add_component!(bob_id, JointComponent(
+    BallSocketJoint(anchor_id, bob_id,
+                    local_anchor_a=Vec3d(0,0,0),
+                    local_anchor_b=Vec3d(0,2,0))
+))
+
+# Distance joint (rope)
+add_component!(entity_b, JointComponent(
+    DistanceJoint(entity_a, entity_b, target_distance=2.0)
+))
+```
+
+**Trigger volumes** — detect when entities enter/exit a region:
+```julia
+ColliderComponent(shape=AABBShape(Vec3f(2,2,2)), is_trigger=true)
+TriggerComponent(
+    on_enter = (trigger, other) -> @info("$other entered!"),
+    on_exit  = (trigger, other) -> @info("$other exited!")
+)
+```
+
+**Raycasting** — cast rays to find what's at a location:
+```julia
+hit = raycast(Vec3d(0, 10, 0), Vec3d(0, -1, 0), max_distance=50.0)
+if hit !== nothing
+    @info "Hit entity $(hit.entity) at $(hit.point)"
+end
+```
+
+**CCD** — prevent fast objects from tunneling through walls:
+```julia
+RigidBodyComponent(body_type=BODY_DYNAMIC, mass=0.5,
+                   ccd_mode=CCD_SWEPT,
+                   velocity=Vec3d(50, 0, 0))
+```
+
+See `examples/physics_demo.jl` for a comprehensive showcase of all physics features.
 
 ---
 
