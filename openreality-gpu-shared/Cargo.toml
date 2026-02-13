@@ -1,0 +1,9 @@
+[package]
+name = "openreality-gpu-shared"
+version = "0.1.0"
+edition = "2021"
+description = "Shared GPU types, WGSL shaders, and scene format for OpenReality"
+
+[dependencies]
+bytemuck = { version = "1", features = ["derive"] }
+glam = "0.29"

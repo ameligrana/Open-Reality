@@ -178,6 +178,23 @@ if !Sys.isapple()
     include("backend/vulkan/vulkan_backend.jl")
 end
 
+# WebGPU backend (all platforms, requires compiled Rust FFI library)
+const _WEBGPU_LIB_PATH = joinpath(@__DIR__, "..", "openreality-wgpu", "target", "release",
+    Sys.iswindows() ? "openreality_wgpu.dll" :
+    Sys.isapple() ? "libopenreality_wgpu.dylib" :
+    "libopenreality_wgpu.so")
+const _WEBGPU_LIB_DEBUG_PATH = joinpath(@__DIR__, "..", "openreality-wgpu", "target", "debug",
+    Sys.iswindows() ? "openreality_wgpu.dll" :
+    Sys.isapple() ? "libopenreality_wgpu.dylib" :
+    "libopenreality_wgpu.so")
+if isfile(_WEBGPU_LIB_PATH) || isfile(_WEBGPU_LIB_DEBUG_PATH)
+    include("backend/webgpu/webgpu_types.jl")
+    include("backend/webgpu/webgpu_ffi.jl")
+    include("backend/webgpu/webgpu_backend.jl")
+    export WebGPUBackend, WebGPUGPUMesh, WebGPUGPUTexture, WebGPUFramebuffer,
+           WebGPUGBuffer, WebGPUGPUResourceCache, WebGPUTextureCache
+end
+
 # Rendering pipeline (after backend — uses backend types)
 include("rendering/pipeline.jl")
 include("rendering/systems.jl")
@@ -187,6 +204,9 @@ include("rendering/pbr_pipeline.jl")
 include("loading/obj_loader.jl")
 include("loading/gltf_loader.jl")
 include("loading/loader.jl")
+
+# Scene export (ORSB format for WASM web deployment)
+include("export/scene_export.jl")
 
 # Export ECS
 export EntityID, World, create_entity!, create_entity_id
@@ -370,6 +390,9 @@ export find_active_camera, get_view_matrix, get_projection_matrix
 
 # Export Model Loading
 export load_model, load_obj, load_gltf
+
+# Export Scene Export (ORSB)
+export export_scene
 
 """
     render(scene::Scene; backend=OpenGLBackend(), width=1280, height=720, title="OpenReality", post_process=nothing, ui=nothing)

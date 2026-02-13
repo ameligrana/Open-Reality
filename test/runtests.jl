@@ -3050,4 +3050,173 @@ using StaticArrays
             @test OpenReality.GRAVITY == Vec3f(0.0f0, -9.81f0, 0.0f0)
         end
     end
+
+    @testset "ORSB Scene Export" begin
+        @testset "Export constants" begin
+            @test OpenReality.ORSB_MAGIC == UInt8['O', 'R', 'S', 'B']
+            @test OpenReality.ORSB_VERSION == UInt32(1)
+        end
+
+        @testset "Empty scene export roundtrip" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            s = scene()
+            tmp = tempname() * ".orsb"
+            try
+                export_scene(s, tmp)
+                @test isfile(tmp)
+                data = read(tmp)
+                # At least header (32 bytes)
+                @test length(data) >= 32
+                # Check magic
+                @test data[1:4] == UInt8['O', 'R', 'S', 'B']
+                # Version
+                @test reinterpret(UInt32, data[5:8])[1] == UInt32(1)
+                # 0 entities
+                @test reinterpret(UInt32, data[13:16])[1] == UInt32(0)
+            finally
+                isfile(tmp) && rm(tmp)
+            end
+        end
+
+        @testset "Single entity export" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            eid = create_entity_id()
+            add_component!(eid, transform(position=Vec3d(1.0, 2.0, 3.0)))
+            s = add_entity(scene(), eid)
+
+            tmp = tempname() * ".orsb"
+            try
+                export_scene(s, tmp)
+                data = read(tmp)
+                @test length(data) >= 32
+                # 1 entity
+                @test reinterpret(UInt32, data[13:16])[1] == UInt32(1)
+                # Entity ID should be in the entity graph section (starts at byte 33)
+                eid_bytes = reinterpret(UInt64, data[33:40])[1]
+                @test eid_bytes == UInt64(eid)
+            finally
+                isfile(tmp) && rm(tmp)
+            end
+        end
+
+        @testset "Entity with mesh and material" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            eid = create_entity_id()
+            add_component!(eid, transform())
+            add_component!(eid, MeshComponent(
+                vertices=[Point3f(0,0,0), Point3f(1,0,0), Point3f(0,1,0)],
+                normals=[Vec3f(0,0,1), Vec3f(0,0,1), Vec3f(0,0,1)],
+                uvs=[Vec2f(0,0), Vec2f(1,0), Vec2f(0,1)],
+                indices=UInt32[0, 1, 2]
+            ))
+            add_component!(eid, MaterialComponent(
+                color=RGB{Float32}(1.0, 0.0, 0.0),
+                metallic=0.5f0,
+                roughness=0.5f0
+            ))
+            s = add_entity(scene(), eid)
+
+            tmp = tempname() * ".orsb"
+            try
+                export_scene(s, tmp)
+                data = read(tmp)
+                # Should have 1 entity, 1 mesh, 0 textures, 1 material
+                @test reinterpret(UInt32, data[13:16])[1] == UInt32(1)  # entities
+                @test reinterpret(UInt32, data[17:20])[1] == UInt32(1)  # meshes
+                @test reinterpret(UInt32, data[21:24])[1] == UInt32(0)  # textures
+                @test reinterpret(UInt32, data[25:28])[1] == UInt32(1)  # materials
+                # File should be well over the header
+                @test length(data) > 200
+            finally
+                isfile(tmp) && rm(tmp)
+            end
+        end
+
+        @testset "Physics config export" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            s = scene()
+            config = PhysicsWorldConfig(
+                gravity=Vec3d(0, -9.81, 0),
+                fixed_dt=1.0/60.0,
+                max_substeps=4
+            )
+            tmp = tempname() * ".orsb"
+            try
+                export_scene(s, tmp; physics_config=config)
+                data = read(tmp)
+                # File should contain physics config at the end (48 bytes)
+                @test length(data) >= 80  # header + empty sections + physics config
+            finally
+                isfile(tmp) && rm(tmp)
+            end
+        end
+
+        @testset "Entity with lights" begin
+            reset_entity_counter!()
+            reset_component_stores!()
+
+            eid1 = create_entity_id()
+            add_component!(eid1, transform(position=Vec3d(5.0, 10.0, 5.0)))
+            add_component!(eid1, PointLightComponent(
+                color=RGB{Float32}(1.0, 1.0, 1.0),
+                intensity=10.0f0,
+                range=50.0f0
+            ))
+
+            eid2 = create_entity_id()
+            add_component!(eid2, transform())
+            add_component!(eid2, DirectionalLightComponent(
+                direction=Vec3f(0.0, -1.0, 0.0),
+                color=RGB{Float32}(1.0, 0.9, 0.8),
+                intensity=5.0f0
+            ))
+
+            s = add_entity(add_entity(scene(), eid1), eid2)
+            tmp = tempname() * ".orsb"
+            try
+                export_scene(s, tmp)
+                data = read(tmp)
+                @test length(data) > 32
+                # 2 entities
+                @test reinterpret(UInt32, data[13:16])[1] == UInt32(2)
+            finally
+                isfile(tmp) && rm(tmp)
+            end
+        end
+    end
+
+    @testset "WebGPU Backend Types" begin
+        @testset "Type definitions exist" begin
+            @test isdefined(OpenReality, :WebGPUGPUMesh)
+            @test isdefined(OpenReality, :WebGPUGPUTexture)
+            @test isdefined(OpenReality, :WebGPUFramebuffer)
+            @test isdefined(OpenReality, :WebGPUGBuffer)
+            @test isdefined(OpenReality, :WebGPUGPUResourceCache)
+            @test isdefined(OpenReality, :WebGPUTextureCache)
+        end
+
+        @testset "Type hierarchy" begin
+            @test WebGPUGPUMesh <: AbstractGPUMesh
+            @test WebGPUGPUTexture <: AbstractGPUTexture
+            @test WebGPUFramebuffer <: AbstractFramebuffer
+        end
+
+        @testset "WebGPU type construction" begin
+            m = WebGPUGPUMesh(UInt64(1), Int32(36))
+            @test m.handle == UInt64(1)
+            @test m.index_count == Int32(36)
+
+            t = WebGPUGPUTexture(UInt64(2), 256, 256, 4)
+            @test t.handle == UInt64(2)
+            @test t.width == 256
+        end
+    end
 end

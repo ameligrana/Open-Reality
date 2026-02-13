@@ -1,0 +1,18 @@
+[package]
+name = "openreality-wgpu"
+version = "0.1.0"
+edition = "2021"
+description = "WebGPU rendering backend for OpenReality (native FFI library)"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+openreality-gpu-shared = { path = "../openreality-gpu-shared" }
+wgpu = "23"
+pollster = "0.4"
+raw-window-handle = "0.6"
+bytemuck = { version = "1", features = ["derive"] }
+glam = "0.29"
+log = "0.4"
+env_logger = "0.11"

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenReality</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #111; overflow: hidden; }
+        canvas {
+            display: block;
+            width: 100vw;
+            height: 100vh;
+        }
+        #loading {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #ccc;
+            font-family: monospace;
+            font-size: 18px;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="openreality-canvas"></canvas>
+    <div id="loading">Loading OpenReality...</div>
+
+    <script type="module">
+        import init, { create_app } from './pkg/openreality_web.js';
+
+        async function main() {
+            // Initialize WASM module
+            await init();
+
+            // Fetch the scene bundle
+            const scenePath = new URLSearchParams(window.location.search).get('scene') || 'scene.orsb';
+            const response = await fetch(scenePath);
+            if (!response.ok) {
+                document.getElementById('loading').textContent =
+                    `Failed to load scene: ${scenePath} (${response.status})`;
+                return;
+            }
+            const sceneData = new Uint8Array(await response.arrayBuffer());
+
+            // Set canvas size
+            const canvas = document.getElementById('openreality-canvas');
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+
+            // Create the application
+            const app = await create_app('openreality-canvas', sceneData);
+
+            // Remove loading indicator
+            document.getElementById('loading').remove();
+
+            // Handle resize
+            window.addEventListener('resize', () => {
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+            });
+
+            // Game loop
+            function frame(time) {
+                app.frame(time);
+                requestAnimationFrame(frame);
+            }
+            requestAnimationFrame(frame);
+        }
+
+        main().catch(console.error);
+    </script>
+</body>
+</html>
