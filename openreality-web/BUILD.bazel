@@ -1,0 +1,41 @@
+# WASM web runtime — built via wasm-pack.
+# wasm-pack handles the full compilation + wasm-bindgen pipeline.
+
+genrule(
+    name = "openreality_web_pkg",
+    srcs = glob(["src/**/*.rs"]) + [
+        "Cargo.toml",
+        "//:Cargo.toml",
+        "//:Cargo.lock",
+        "//openreality-gpu-shared:wgsl_shaders",
+    ],
+    outs = [
+        "openreality_web.js",
+        "openreality_web_bg.wasm",
+    ],
+    cmd = """
+        # wasm-pack runs cargo internally, needs source tree access
+        CRATE_DIR=openreality-web
+        if [ -d "$$CRATE_DIR" ]; then
+            cd $$CRATE_DIR
+        fi
+        wasm-pack build --target web --release --out-dir _bazel_pkg 2>&1
+        cp _bazel_pkg/openreality_web.js $(@D)/openreality_web.js
+        cp _bazel_pkg/openreality_web_bg.wasm $(@D)/openreality_web_bg.wasm
+        rm -rf _bazel_pkg
+    """,
+    tags = ["no-sandbox"],
+    visibility = ["//visibility:public"],
+)
+
+# Supplementary web assets
+filegroup(
+    name = "web_assets",
+    srcs = glob([
+        "*.html",
+        "*.orsb",
+    ]),
+    visibility = ["//visibility:public"],
+)
+
+exports_files(["Cargo.toml"])

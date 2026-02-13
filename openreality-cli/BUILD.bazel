@@ -1,0 +1,16 @@
+load("@crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_binary")
+
+rust_binary(
+    name = "orcli",
+    srcs = glob(["src/**/*.rs"]),
+    deps = all_crate_deps(
+        normal = True,
+    ),
+    proc_macro_deps = all_crate_deps(
+        proc_macro = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+exports_files(["Cargo.toml"])

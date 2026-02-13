@@ -1,0 +1,41 @@
+module(
+    name = "open_reality",
+    version = "0.1.0",
+)
+
+# ============================================================
+# Core Bazel dependencies
+# ============================================================
+bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "bazel_skylib", version = "1.9.0")
+
+# ============================================================
+# Rust toolchain and crate_universe
+# ============================================================
+bazel_dep(name = "rules_rust", version = "0.68.1")
+
+rust = use_extension("@rules_rust//rust:extensions.bzl", "rust")
+rust.toolchain(
+    edition = "2021",
+    versions = ["1.82.0"],
+    extra_target_triples = ["wasm32-unknown-unknown"],
+)
+use_repo(rust, "rust_toolchains")
+register_toolchains("@rust_toolchains//:all")
+
+# Resolve all Rust dependencies from the workspace Cargo.toml
+crate = use_extension(
+    "@rules_rust//crate_universe:extensions.bzl",
+    "crate",
+)
+crate.from_cargo(
+    name = "crates",
+    cargo_lockfile = "//:Cargo.lock",
+    manifests = ["//:Cargo.toml"],
+)
+use_repo(crate, "crates")
+
+# ============================================================
+# Swift (macOS only, for Metal bridge)
+# ============================================================
+bazel_dep(name = "rules_swift", version = "3.4.2")

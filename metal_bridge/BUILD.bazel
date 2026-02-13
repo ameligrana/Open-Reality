@@ -1,0 +1,17 @@
+# Metal backend bridge -- macOS only.
+# Uses genrule wrapping swift build for pragmatism (SPM already works well).
+
+genrule(
+    name = "MetalBridge",
+    srcs = glob(["Sources/MetalBridge/**/*.swift"]) + ["Package.swift"],
+    outs = ["libMetalBridge.dylib"],
+    cmd = """
+        cd $$(dirname $(location Package.swift))
+        swift build -c release 2>&1
+        cp .build/release/libMetalBridge.dylib $(OUTS)
+    """,
+    target_compatible_with = [
+        "@platforms//os:macos",
+    ],
+    visibility = ["//visibility:public"],
+)

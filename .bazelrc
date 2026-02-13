@@ -1,0 +1,12 @@
+# Platform configuration
+build --enable_platform_specific_config
+build:macos --apple_platform_type=macos
+
+# Test output
+test --test_output=errors
+
+# Local disk cache
+build --disk_cache=~/.cache/bazel-disk
+
+# Cargo repin: run when Cargo.toml deps change
+# CARGO_BAZEL_REPIN=true bazel sync --only=crates

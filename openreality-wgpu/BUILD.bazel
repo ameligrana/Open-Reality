@@ -1,0 +1,21 @@
+load("@crates//:defs.bzl", "aliases", "all_crate_deps")
+load("@rules_rust//rust:defs.bzl", "rust_shared_library")
+
+# Produces libopenreality_wgpu.so (Linux), .dylib (macOS), .dll (Windows)
+# Consumed by Julia via ccall at runtime.
+rust_shared_library(
+    name = "openreality_wgpu",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "openreality_wgpu",
+    deps = all_crate_deps(
+        normal = True,
+    ) + [
+        "//openreality-gpu-shared",
+    ],
+    proc_macro_deps = all_crate_deps(
+        proc_macro = True,
+    ),
+    visibility = ["//visibility:public"],
+)
+
+exports_files(["Cargo.toml"])

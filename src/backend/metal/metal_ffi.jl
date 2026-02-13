@@ -1,7 +1,14 @@
 # Metal bridge FFI — ccall wrappers for every @_cdecl function in the Swift bridge
 
 # Path to the compiled Metal bridge dylib
-const METAL_BRIDGE_LIB = joinpath(@__DIR__, "..", "..", "..", "metal_bridge", ".build", "release", "libMetalBridge.dylib")
+const METAL_BRIDGE_LIB = let
+    env_path = get(ENV, "OPENREALITY_METAL_LIB", "")
+    if !isempty(env_path) && isfile(env_path)
+        env_path
+    else
+        joinpath(@__DIR__, "..", "..", "..", "metal_bridge", ".build", "release", "libMetalBridge.dylib")
+    end
+end
 
 function _metal_lib()
     if !isfile(METAL_BRIDGE_LIB)

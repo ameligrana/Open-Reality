@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "openreality-gpu-shared",
+    "openreality-wgpu",
+    "openreality-web",
+    "openreality-cli",
+]
+resolver = "2"
