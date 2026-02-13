@@ -21,12 +21,14 @@ mutable struct OpenGLBackend <: AbstractBackend
     csm::Union{CascadedShadowMap, Nothing}  # Cascaded shadow maps (preferred)
     bounds_cache::Dict{EntityID, BoundingSphere}
     post_process::Union{PostProcessPipeline, Nothing}
+    prev_view_proj::Mat4f   # Previous frame's view*proj matrix for motion blur
 
     OpenGLBackend(; post_process_config::PostProcessConfig = PostProcessConfig(), use_deferred::Bool = true) = new(
         false, nothing, InputState(), nothing, nothing, use_deferred,
         GPUResourceCache(), TextureCache(),
         nothing, nothing, Dict{EntityID, BoundingSphere}(),
-        PostProcessPipeline(config=post_process_config)
+        PostProcessPipeline(config=post_process_config),
+        Mat4f(I)
     )
 end
 
@@ -112,6 +114,7 @@ function shutdown!(backend::OpenGLBackend)
         destroy_post_process_pipeline!(backend.post_process)
         backend.post_process = nothing
     end
+    reset_instance_buffer!()
     if backend.window !== nothing
         destroy_window!(backend.window)
         backend.window = nothing
@@ -161,6 +164,11 @@ end
 
 function backend_destroy_mesh!(backend::OpenGLBackend, gpu_mesh::GPUMesh)
     destroy_gpu_mesh!(gpu_mesh)
+    return nothing
+end
+
+function backend_draw_mesh_instanced!(backend::OpenGLBackend, gpu_mesh::GPUMesh, instance_count::Int)
+    draw_instanced!(gpu_mesh, instance_count)
     return nothing
 end
 
@@ -552,8 +560,16 @@ function render_gbuffer_pass!(backend::OpenGLBackend, pipeline::DeferredPipeline
     glClearColor(0.0f0, 0.0f0, 0.0f0, 0.0f0)
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
+    rendered_count = 0
     # Render each opaque entity
-    for (entity_id, mesh, model, normal_matrix) in opaque_entities
+    for erd in opaque_entities
+        entity_id = erd.entity_id
+        mesh = erd.mesh
+        model = erd.model
+        normal_matrix = erd.normal_matrix
+        lod_crossfade = erd.lod_crossfade
+        lod_next_mesh = erd.lod_next_mesh
+
         # Get material
         material = get_component(entity_id, MaterialComponent)
         if material === nothing
@@ -561,9 +577,18 @@ function render_gbuffer_pass!(backend::OpenGLBackend, pipeline::DeferredPipeline
         end
 
         # Determine shader variant based on material
-        variant_key = determine_shader_variant(material)
-        sp = get_or_compile_variant!(pipeline.gbuffer_shader_library, variant_key)
+        base_variant_key = determine_shader_variant(material)
 
+        # If LOD crossfading, add dither feature to shader variant
+        is_crossfading = lod_crossfade < 1.0f0 && lod_next_mesh !== nothing
+        if is_crossfading
+            dither_features = union(base_variant_key.features, Set([FEATURE_LOD_DITHER]))
+            variant_key = ShaderVariantKey(dither_features)
+        else
+            variant_key = base_variant_key
+        end
+
+        sp = get_or_compile_variant!(pipeline.gbuffer_shader_library, variant_key)
         glUseProgram(sp.id)
 
         # Set uniforms
@@ -594,16 +619,190 @@ function render_gbuffer_pass!(backend::OpenGLBackend, pipeline::DeferredPipeline
         # Bind material textures
         bind_material_textures!(sp, material, backend.texture_cache)
 
-        # Draw mesh
-        gpu_mesh = get_or_upload_mesh!(backend.gpu_cache, entity_id, mesh)
+        if is_crossfading
+            # Pass 1: render current LOD with dither alpha
+            set_uniform!(sp, "u_LODAlpha", lod_crossfade)
+            gpu_mesh = get_or_upload_mesh!(backend.gpu_cache, entity_id, mesh)
+            _upload_skinning_uniforms!(sp, entity_id, gpu_mesh)
+            glBindVertexArray(gpu_mesh.vao)
+            glDrawElements(GL_TRIANGLES, gpu_mesh.index_count, GL_UNSIGNED_INT, C_NULL)
+            glBindVertexArray(GLuint(0))
 
-        # Upload skinning uniforms
-        _upload_skinning_uniforms!(sp, entity_id, gpu_mesh)
+            # Pass 2: render next LOD with complementary dither alpha
+            set_uniform!(sp, "u_LODAlpha", 1.0f0 - lod_crossfade)
+            # Use offset entity key for next LOD mesh to avoid GPU cache conflicts
+            lod_next_key = entity_id + EntityID(0x8000000000000000)
+            gpu_mesh_next = get_or_upload_mesh!(backend.gpu_cache, lod_next_key, lod_next_mesh)
+            _upload_skinning_uniforms!(sp, entity_id, gpu_mesh_next)
+            glBindVertexArray(gpu_mesh_next.vao)
+            glDrawElements(GL_TRIANGLES, gpu_mesh_next.index_count, GL_UNSIGNED_INT, C_NULL)
+            glBindVertexArray(GLuint(0))
+        else
+            # Normal single-pass rendering
+            gpu_mesh = get_or_upload_mesh!(backend.gpu_cache, entity_id, mesh)
+            _upload_skinning_uniforms!(sp, entity_id, gpu_mesh)
+            glBindVertexArray(gpu_mesh.vao)
+            glDrawElements(GL_TRIANGLES, gpu_mesh.index_count, GL_UNSIGNED_INT, C_NULL)
+            glBindVertexArray(GLuint(0))
+        end
+        rendered_count += 1
+    end
 
-        glBindVertexArray(gpu_mesh.vao)
-        glDrawElements(GL_TRIANGLES, gpu_mesh.index_count, GL_UNSIGNED_INT, C_NULL)
-        glBindVertexArray(GLuint(0))
+    # ---- Instanced batch rendering ----
+    # Group remaining non-crossfading entities into instanced batches
+    # (This is a second pass that re-examines opaque_entities for batching opportunities)
+    # Note: The single-entity loop above already rendered everything, including entities
+    # that could be instanced. For instanced rendering to take effect, we need to split
+    # the entities into batches vs singles BEFORE rendering. This is done in render_frame!
+    # when instancing is enabled. The render_gbuffer_pass! function itself just renders
+    # whatever it receives.
 
+    unbind_framebuffer!()
+end
+
+"""
+    render_gbuffer_pass_instanced!(backend, pipeline, batches, singles, view, proj, cam_pos)
+
+Render opaque entities to the G-Buffer using instanced rendering for batches
+and single-entity rendering for non-batchable entities.
+"""
+function render_gbuffer_pass_instanced!(backend::OpenGLBackend, pipeline::DeferredPipeline,
+                                         batches, singles,
+                                         view::Mat4f, proj::Mat4f,
+                                         cam_pos::Vec3f=Vec3f(0,0,0))
+    # Bind G-Buffer for writing
+    bind_gbuffer_for_write!(pipeline.gbuffer)
+    glViewport(0, 0, pipeline.gbuffer.width, pipeline.gbuffer.height)
+
+    glEnable(GL_DEPTH_TEST)
+    glDepthMask(GL_TRUE)
+    glDepthFunc(GL_LESS)
+    glEnable(GL_CULL_FACE)
+    glDisable(GL_BLEND)
+    glActiveTexture(GL_TEXTURE0)
+
+    glClearColor(0.0f0, 0.0f0, 0.0f0, 0.0f0)
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+
+    inst_buf = get_instance_buffer!()
+
+    # ---- Render instanced batches ----
+    for batch in batches
+        rep = batch.representative
+        material = get_component(rep.entity_id, MaterialComponent)
+        if material === nothing
+            continue
+        end
+
+        # Use instanced shader variant
+        base_features = determine_shader_variant(material).features
+        instanced_features = union(base_features, Set([FEATURE_INSTANCED]))
+        variant_key = ShaderVariantKey(instanced_features)
+        sp = get_or_compile_variant!(pipeline.gbuffer_shader_library, variant_key)
+        glUseProgram(sp.id)
+
+        # Set per-batch uniforms (camera, material — shared across all instances)
+        set_uniform!(sp, "u_View", view)
+        set_uniform!(sp, "u_Projection", proj)
+        set_uniform!(sp, "u_CameraPos", cam_pos)
+        set_uniform!(sp, "u_HasSkinning", Int32(0))
+
+        # Material uniforms (from representative entity)
+        set_uniform!(sp, "u_Albedo", material.color)
+        set_uniform!(sp, "u_Metallic", material.metallic)
+        set_uniform!(sp, "u_Roughness", material.roughness)
+        set_uniform!(sp, "u_AO", 1.0f0)
+        set_uniform!(sp, "u_EmissiveFactor", material.emissive_factor)
+        set_uniform!(sp, "u_Opacity", material.opacity)
+        set_uniform!(sp, "u_AlphaCutoff", material.alpha_cutoff)
+
+        if material.clearcoat > 0.0f0
+            set_uniform!(sp, "u_Clearcoat", material.clearcoat)
+            set_uniform!(sp, "u_ClearcoatRoughness", material.clearcoat_roughness)
+        end
+        if material.subsurface > 0.0f0
+            set_uniform!(sp, "u_Subsurface", material.subsurface)
+        end
+
+        bind_material_textures!(sp, material, backend.texture_cache)
+
+        # Upload instance transforms and draw
+        gpu_mesh = get_or_upload_mesh!(backend.gpu_cache, rep.entity_id, rep.mesh)
+        upload_instance_data!(inst_buf, gpu_mesh, batch.model_matrices, batch.normal_matrices)
+        draw_instanced!(gpu_mesh, length(batch.model_matrices))
+    end
+
+    # ---- Render single (non-batchable) entities ----
+    for erd in singles
+        entity_id = erd.entity_id
+        mesh = erd.mesh
+        model = erd.model
+        normal_matrix = erd.normal_matrix
+        lod_crossfade = erd.lod_crossfade
+        lod_next_mesh = erd.lod_next_mesh
+
+        material = get_component(entity_id, MaterialComponent)
+        if material === nothing
+            continue
+        end
+
+        base_variant_key = determine_shader_variant(material)
+        is_crossfading = lod_crossfade < 1.0f0 && lod_next_mesh !== nothing
+        if is_crossfading
+            dither_features = union(base_variant_key.features, Set([FEATURE_LOD_DITHER]))
+            variant_key = ShaderVariantKey(dither_features)
+        else
+            variant_key = base_variant_key
+        end
+
+        sp = get_or_compile_variant!(pipeline.gbuffer_shader_library, variant_key)
+        glUseProgram(sp.id)
+
+        set_uniform!(sp, "u_Model", model)
+        set_uniform!(sp, "u_View", view)
+        set_uniform!(sp, "u_Projection", proj)
+        set_uniform!(sp, "u_NormalMatrix", normal_matrix)
+        set_uniform!(sp, "u_Albedo", material.color)
+        set_uniform!(sp, "u_Metallic", material.metallic)
+        set_uniform!(sp, "u_Roughness", material.roughness)
+        set_uniform!(sp, "u_AO", 1.0f0)
+        set_uniform!(sp, "u_EmissiveFactor", material.emissive_factor)
+        set_uniform!(sp, "u_Opacity", material.opacity)
+        set_uniform!(sp, "u_AlphaCutoff", material.alpha_cutoff)
+        set_uniform!(sp, "u_CameraPos", cam_pos)
+
+        if material.clearcoat > 0.0f0
+            set_uniform!(sp, "u_Clearcoat", material.clearcoat)
+            set_uniform!(sp, "u_ClearcoatRoughness", material.clearcoat_roughness)
+        end
+        if material.subsurface > 0.0f0
+            set_uniform!(sp, "u_Subsurface", material.subsurface)
+        end
+
+        bind_material_textures!(sp, material, backend.texture_cache)
+
+        if is_crossfading
+            set_uniform!(sp, "u_LODAlpha", lod_crossfade)
+            gpu_mesh = get_or_upload_mesh!(backend.gpu_cache, entity_id, mesh)
+            _upload_skinning_uniforms!(sp, entity_id, gpu_mesh)
+            glBindVertexArray(gpu_mesh.vao)
+            glDrawElements(GL_TRIANGLES, gpu_mesh.index_count, GL_UNSIGNED_INT, C_NULL)
+            glBindVertexArray(GLuint(0))
+
+            set_uniform!(sp, "u_LODAlpha", 1.0f0 - lod_crossfade)
+            lod_next_key = entity_id + EntityID(0x8000000000000000)
+            gpu_mesh_next = get_or_upload_mesh!(backend.gpu_cache, lod_next_key, lod_next_mesh)
+            _upload_skinning_uniforms!(sp, entity_id, gpu_mesh_next)
+            glBindVertexArray(gpu_mesh_next.vao)
+            glDrawElements(GL_TRIANGLES, gpu_mesh_next.index_count, GL_UNSIGNED_INT, C_NULL)
+            glBindVertexArray(GLuint(0))
+        else
+            gpu_mesh = get_or_upload_mesh!(backend.gpu_cache, entity_id, mesh)
+            _upload_skinning_uniforms!(sp, entity_id, gpu_mesh)
+            glBindVertexArray(gpu_mesh.vao)
+            glDrawElements(GL_TRIANGLES, gpu_mesh.index_count, GL_UNSIGNED_INT, C_NULL)
+            glBindVertexArray(GLuint(0))
+        end
     end
 
     unbind_framebuffer!()
@@ -700,7 +899,23 @@ function render_deferred_lighting_pass!(backend::OpenGLBackend, pipeline::Deferr
         set_uniform!(sp, "u_IBLIntensity", pipeline.ibl_env.intensity)
         set_uniform!(sp, "u_HasIBL", Int32(1))
     else
-        # No IBL - use fallback ambient lighting
+        # No IBL - bind placeholder cubemap/2D textures to avoid samplerCube type mismatch
+        # (samplerCube uniforms defaulting to unit 0 with GL_TEXTURE_2D causes GL_INVALID_OPERATION)
+        glActiveTexture(GL_TEXTURE0 + UInt32(next_unit))
+        glBindTexture(GL_TEXTURE_CUBE_MAP, pipeline.placeholder_cubemap)
+        set_uniform!(sp, "u_IrradianceMap", Int32(next_unit))
+        next_unit += 1
+
+        glActiveTexture(GL_TEXTURE0 + UInt32(next_unit))
+        glBindTexture(GL_TEXTURE_CUBE_MAP, pipeline.placeholder_cubemap)
+        set_uniform!(sp, "u_PrefilterMap", Int32(next_unit))
+        next_unit += 1
+
+        glActiveTexture(GL_TEXTURE0 + UInt32(next_unit))
+        glBindTexture(GL_TEXTURE_2D, pipeline.placeholder_2d)
+        set_uniform!(sp, "u_BRDFLUT", Int32(next_unit))
+
+        set_uniform!(sp, "u_IBLIntensity", 0.0f0)
         set_uniform!(sp, "u_HasIBL", Int32(0))
     end
 
@@ -834,7 +1049,7 @@ function render_frame!(backend::OpenGLBackend, scene::Scene)
     frustum = extract_frustum(vp)
 
     # ---- Collect and classify entities ----
-    opaque_entities = Tuple{EntityID, MeshComponent, Mat4f, SMatrix{3,3,Float32,9}}[]
+    opaque_entities = EntityRenderData[]
     transparent_entities = Tuple{EntityID, MeshComponent, Mat4f, SMatrix{3,3,Float32,9}, Float32}[]
 
     iterate_components(MeshComponent) do entity_id, mesh
@@ -853,6 +1068,22 @@ function render_frame!(backend::OpenGLBackend, scene::Scene)
             return  # culled
         end
 
+        # LOD selection
+        render_mesh = mesh
+        lod_crossfade = 1.0f0
+        lod_next_mesh = nothing
+        lod = get_component(entity_id, LODComponent)
+        if lod !== nothing && !isempty(lod.levels)
+            dx = world_center[1] - cam_pos[1]
+            dy = world_center[2] - cam_pos[2]
+            dz = world_center[3] - cam_pos[3]
+            cam_distance = sqrt(dx*dx + dy*dy + dz*dz)
+            selection = select_lod_level(lod, cam_distance, entity_id)
+            render_mesh = selection.mesh
+            lod_crossfade = selection.crossfade_alpha
+            lod_next_mesh = selection.next_mesh
+        end
+
         # Normal matrix
         model3 = SMatrix{3, 3, Float32, 9}(
             model[1,1], model[2,1], model[3,1],
@@ -866,17 +1097,15 @@ function render_frame!(backend::OpenGLBackend, scene::Scene)
         is_transparent = material !== nothing && (material.opacity < 1.0f0 || material.alpha_cutoff > 0.0f0)
 
         if is_transparent
-            # Distance to camera for back-to-front sorting
             dx = world_center[1] - cam_pos[1]
             dy = world_center[2] - cam_pos[2]
             dz = world_center[3] - cam_pos[3]
             dist_sq = dx*dx + dy*dy + dz*dz
-            push!(transparent_entities, (entity_id, mesh, model, normal_matrix, dist_sq))
+            push!(transparent_entities, (entity_id, render_mesh, model, normal_matrix, dist_sq))
         else
-            push!(opaque_entities, (entity_id, mesh, model, normal_matrix))
+            push!(opaque_entities, EntityRenderData(entity_id, render_mesh, model, normal_matrix, lod_crossfade, lod_next_mesh))
         end
     end
-
 
     # ==================================================================
     # DEFERRED RENDERING PATH
@@ -896,11 +1125,34 @@ function render_frame!(backend::OpenGLBackend, scene::Scene)
         #     proj_jittered = apply_taa_jitter!(proj, pipeline.taa_pass.jitter_index, width, height)
         # end
 
-        # ---- G-Buffer pass (opaque only) ----
-        render_gbuffer_pass!(backend, pipeline, opaque_entities, view, proj_jittered, cam_pos)
+        # ---- G-Buffer pass (opaque only, with instanced batching) ----
+        (batches, singles) = group_into_batches(opaque_entities)
+        if !isempty(batches)
+            render_gbuffer_pass_instanced!(backend, pipeline, batches, singles, view, proj_jittered, cam_pos)
+        else
+            render_gbuffer_pass!(backend, pipeline, opaque_entities, view, proj_jittered, cam_pos)
+        end
+
+        # ---- Terrain G-Buffer pass ----
+        vp = proj_jittered * view
+        terrain_frustum = extract_frustum(vp)
+        iterate_components(TerrainComponent) do terrain_eid, terrain_comp
+            td = get(_TERRAIN_CACHE, terrain_eid, nothing)
+            if td !== nothing && td.initialized
+                bind_gbuffer_for_write!(pipeline.gbuffer)
+                glViewport(0, 0, pipeline.gbuffer.width, pipeline.gbuffer.height)
+                glEnable(GL_DEPTH_TEST)
+                glDepthMask(GL_TRUE)
+                glDepthFunc(GL_LESS)
+                glEnable(GL_CULL_FACE)
+                glDisable(GL_BLEND)
+                render_terrain_gbuffer!(backend, td, terrain_comp, view, proj_jittered,
+                                         cam_pos, terrain_frustum, backend.texture_cache)
+                unbind_framebuffer!()
+            end
+        end
 
         # ---- Deferred lighting pass ----
-        # Note: Use non-jittered proj for lighting (jitter only affects geometry)
         render_deferred_lighting_pass!(backend, pipeline, cam_pos, view, proj, light_space, has_shadows)
 
         # ---- Screen-Space Ambient Occlusion (SSAO) pass ----
@@ -956,8 +1208,13 @@ function render_frame!(backend::OpenGLBackend, scene::Scene)
         width, height = Int(viewport[3]), Int(viewport[4])
 
         if backend.post_process !== nothing
+            current_view_proj = proj * view
             end_post_process!(backend.post_process, width, height;
-                              input_texture=final_color_texture)
+                              input_texture=final_color_texture,
+                              depth_texture=pipeline.gbuffer.depth_texture,
+                              view_proj=current_view_proj,
+                              prev_view_proj=backend.prev_view_proj)
+            backend.prev_view_proj = current_view_proj
         else
             # Fallback: blit directly (no tone mapping)
             if pipeline.taa_pass !== nothing
@@ -1088,8 +1345,8 @@ function render_frame!(backend::OpenGLBackend, scene::Scene)
         glDisable(GL_BLEND)
         glEnable(GL_CULL_FACE)
 
-        for (entity_id, mesh, model, normal_matrix) in opaque_entities
-            _render_entity!(backend, sp, entity_id, mesh, model, normal_matrix)
+        for erd in opaque_entities
+            _render_entity!(backend, sp, erd.entity_id, erd.mesh, erd.model, erd.normal_matrix)
         end
 
         # ---- Transparent pass (back-to-front) ----

@@ -18,10 +18,14 @@ mutable struct PostProcessPipeline <: AbstractPostProcessPipeline
     bright_extract_shader::Union{ShaderProgram, Nothing}
     blur_shader::Union{ShaderProgram, Nothing}
     fxaa_shader::Union{ShaderProgram, Nothing}
+    dof_pass::Union{DOFPass, Nothing}
+    motion_blur_pass::Union{MotionBlurPass, Nothing}
+    dof_temp_fbo::Framebuffer   # Temp FBO for DoF output
 
     PostProcessPipeline(; config::PostProcessConfig = PostProcessConfig()) =
         new(config, Framebuffer(), Framebuffer[], Framebuffer(),
-            GLuint(0), GLuint(0), nothing, nothing, nothing, nothing)
+            GLuint(0), GLuint(0), nothing, nothing, nothing, nothing,
+            nothing, nothing, Framebuffer())
 end
 
 # ---- Shader sources ----
@@ -107,6 +111,18 @@ uniform float u_BloomIntensity;
 uniform int u_ToneMapping;   // 0 = Reinhard, 1 = ACES, 2 = Uncharted2
 uniform float u_Gamma;
 
+// Vignette uniforms
+uniform int u_VignetteEnabled;
+uniform float u_VignetteIntensity;
+uniform float u_VignetteRadius;
+uniform float u_VignetteSoftness;
+
+// Color grading uniforms
+uniform int u_ColorGradingEnabled;
+uniform float u_Brightness;
+uniform float u_Contrast;
+uniform float u_Saturation;
+
 // ACES tone mapping
 vec3 ACESFilm(vec3 x)
 {
@@ -151,6 +167,29 @@ void main()
         color = ACESFilm(color);                       // ACES
     else if (u_ToneMapping == 2)
         color = Uncharted2(color);                     // Uncharted 2
+
+    // Color grading (applied in LDR after tone mapping)
+    if (u_ColorGradingEnabled == 1) {
+        // Brightness
+        color += vec3(u_Brightness);
+
+        // Contrast (pivot around mid-gray 0.5)
+        color = (color - 0.5) * u_Contrast + 0.5;
+
+        // Saturation
+        float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
+        color = mix(vec3(luminance), color, u_Saturation);
+
+        color = clamp(color, 0.0, 1.0);
+    }
+
+    // Vignette (darkens edges of the screen)
+    if (u_VignetteEnabled == 1) {
+        vec2 uv = v_TexCoord * 2.0 - 1.0;  // Remap to [-1, 1]
+        float dist = length(uv);
+        float vignette = 1.0 - smoothstep(u_VignetteRadius, u_VignetteRadius + u_VignetteSoftness, dist);
+        color *= mix(1.0, vignette, u_VignetteIntensity);
+    }
 
     // Gamma correction
     color = pow(color, vec3(1.0 / u_Gamma));
@@ -287,6 +326,20 @@ function create_post_process_pipeline!(pp::PostProcessPipeline, width::Int, heig
     pp.composite_shader = create_shader_program(PP_QUAD_VERTEX, PP_COMPOSITE_FRAGMENT)
     pp.fxaa_shader = create_shader_program(PP_QUAD_VERTEX, PP_FXAA_FRAGMENT)
 
+    # DoF pass
+    if pp.config.dof_enabled
+        pp.dof_pass = DOFPass()
+        create_dof_pass!(pp.dof_pass, width, height)
+        pp.dof_temp_fbo = Framebuffer()
+        create_framebuffer!(pp.dof_temp_fbo, width, height)
+    end
+
+    # Motion blur pass
+    if pp.config.motion_blur_enabled
+        pp.motion_blur_pass = MotionBlurPass()
+        create_motion_blur_pass!(pp.motion_blur_pass, width, height)
+    end
+
     return nothing
 end
 
@@ -319,6 +372,17 @@ function destroy_post_process_pipeline!(pp::PostProcessPipeline)
         end
     end
 
+    if pp.dof_pass !== nothing
+        destroy_dof_pass!(pp.dof_pass)
+        pp.dof_pass = nothing
+        destroy_framebuffer!(pp.dof_temp_fbo)
+    end
+
+    if pp.motion_blur_pass !== nothing
+        destroy_motion_blur_pass!(pp.motion_blur_pass)
+        pp.motion_blur_pass = nothing
+    end
+
     return nothing
 end
 
@@ -335,6 +399,13 @@ function resize_post_process!(pp::PostProcessPipeline, width::Int, height::Int)
         resize_framebuffer!(fb, half_w, half_h)
     end
     resize_framebuffer!(pp.bright_fbo, half_w, half_h)
+    if pp.dof_pass !== nothing
+        resize_dof_pass!(pp.dof_pass, width, height)
+        resize_framebuffer!(pp.dof_temp_fbo, width, height)
+    end
+    if pp.motion_blur_pass !== nothing
+        resize_motion_blur_pass!(pp.motion_blur_pass, width, height)
+    end
 end
 
 # ---- Begin / End ----
@@ -351,17 +422,27 @@ end
 
 """
     end_post_process!(pp::PostProcessPipeline, screen_width::Int, screen_height::Int;
-                      input_texture::GLuint = GLuint(0))
+                      input_texture::GLuint = GLuint(0),
+                      depth_texture::GLuint = GLuint(0),
+                      view_proj::Mat4f = Mat4f(I),
+                      prev_view_proj::Mat4f = Mat4f(I))
 
 Execute the full post-processing chain and render to the default framebuffer.
 When `input_texture` is provided (non-zero), it is used as the HDR source instead of
 the internal scene FBO. This allows the deferred rendering path to feed its final
 HDR output (after TAA) into the post-processing chain.
+
+Chain order: Bloom → DoF → Motion Blur → Composite (tone mapping + vignette + color grading) → FXAA
 """
 function end_post_process!(pp::PostProcessPipeline, screen_width::Int, screen_height::Int;
-                           input_texture::GLuint = GLuint(0))
+                           input_texture::GLuint = GLuint(0),
+                           depth_texture::GLuint = GLuint(0),
+                           view_proj::Mat4f = Mat4f(I),
+                           prev_view_proj::Mat4f = Mat4f(I))
     # Use provided input texture or fall back to internal scene FBO
     scene_texture = input_texture != GLuint(0) ? input_texture : pp.scene_fbo.color_texture
+    # Track the "current" HDR texture through the chain
+    current_texture = scene_texture
 
     glBindFramebuffer(GL_FRAMEBUFFER, GLuint(0))
     glDisable(GL_DEPTH_TEST)
@@ -377,7 +458,7 @@ function end_post_process!(pp::PostProcessPipeline, screen_width::Int, screen_he
         sp_bright = pp.bright_extract_shader
         glUseProgram(sp_bright.id)
         glActiveTexture(GL_TEXTURE0)
-        glBindTexture(GL_TEXTURE_2D, scene_texture)
+        glBindTexture(GL_TEXTURE_2D, current_texture)
         set_uniform!(sp_bright, "u_SceneTexture", Int32(0))
         set_uniform!(sp_bright, "u_Threshold", pp.config.bloom_threshold)
         _render_fullscreen_quad(pp.quad_vao)
@@ -410,7 +491,20 @@ function end_post_process!(pp::PostProcessPipeline, screen_width::Int, screen_he
         bloom_texture = pp.bloom_fbos[2].color_texture
     end
 
-    # --- Composite pass (tone mapping + bloom combine) ---
+    # --- Depth of Field pass ---
+    if pp.config.dof_enabled && pp.dof_pass !== nothing && depth_texture != GLuint(0)
+        current_texture = render_dof!(pp.dof_pass, current_texture, depth_texture,
+                                       pp.config, pp.quad_vao, pp.dof_temp_fbo)
+    end
+
+    # --- Motion Blur pass ---
+    if pp.config.motion_blur_enabled && pp.motion_blur_pass !== nothing && depth_texture != GLuint(0)
+        current_texture = render_motion_blur!(pp.motion_blur_pass, current_texture, depth_texture,
+                                               view_proj, prev_view_proj,
+                                               pp.config, pp.quad_vao)
+    end
+
+    # --- Composite pass (tone mapping + bloom combine + vignette + color grading) ---
     if pp.config.fxaa_enabled && pp.fxaa_shader !== nothing
         # Render composite to scene_fbo (reuse as temp), then FXAA to screen
         glBindFramebuffer(GL_FRAMEBUFFER, pp.scene_fbo.fbo)
@@ -425,7 +519,7 @@ function end_post_process!(pp::PostProcessPipeline, screen_width::Int, screen_he
     if sp_comp !== nothing
         glUseProgram(sp_comp.id)
         glActiveTexture(GL_TEXTURE0)
-        glBindTexture(GL_TEXTURE_2D, scene_texture)
+        glBindTexture(GL_TEXTURE_2D, current_texture)
         set_uniform!(sp_comp, "u_SceneTexture", Int32(0))
 
         if bloom_texture != GLuint(0)
@@ -442,6 +536,23 @@ function end_post_process!(pp::PostProcessPipeline, screen_width::Int, screen_he
                              pp.config.tone_mapping == TONEMAP_ACES ? 1 : 2)
         set_uniform!(sp_comp, "u_ToneMapping", tone_map_idx)
         set_uniform!(sp_comp, "u_Gamma", pp.config.gamma)
+
+        # Vignette uniforms
+        set_uniform!(sp_comp, "u_VignetteEnabled", Int32(pp.config.vignette_enabled ? 1 : 0))
+        if pp.config.vignette_enabled
+            set_uniform!(sp_comp, "u_VignetteIntensity", pp.config.vignette_intensity)
+            set_uniform!(sp_comp, "u_VignetteRadius", pp.config.vignette_radius)
+            set_uniform!(sp_comp, "u_VignetteSoftness", pp.config.vignette_softness)
+        end
+
+        # Color grading uniforms
+        set_uniform!(sp_comp, "u_ColorGradingEnabled", Int32(pp.config.color_grading_enabled ? 1 : 0))
+        if pp.config.color_grading_enabled
+            set_uniform!(sp_comp, "u_Brightness", pp.config.color_grading_brightness)
+            set_uniform!(sp_comp, "u_Contrast", pp.config.color_grading_contrast)
+            set_uniform!(sp_comp, "u_Saturation", pp.config.color_grading_saturation)
+        end
+
         _render_fullscreen_quad(pp.quad_vao)
     end
 

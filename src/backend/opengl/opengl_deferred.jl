@@ -13,6 +13,17 @@ layout(location = 2) in vec2 a_TexCoord;
 layout(location = 3) in vec4 a_BoneWeights;
 layout(location = 4) in uvec4 a_BoneIndices;
 
+// Instanced rendering: per-instance model and normal matrices
+#ifdef FEATURE_INSTANCED
+layout(location = 5) in vec4 a_InstanceModelCol0;
+layout(location = 6) in vec4 a_InstanceModelCol1;
+layout(location = 7) in vec4 a_InstanceModelCol2;
+layout(location = 8) in vec4 a_InstanceModelCol3;
+layout(location = 9) in vec3 a_InstanceNormalCol0;
+layout(location = 10) in vec3 a_InstanceNormalCol1;
+layout(location = 11) in vec3 a_InstanceNormalCol2;
+#endif
+
 #define MAX_BONES 128
 uniform mat4 u_BoneMatrices[MAX_BONES];
 uniform int u_HasSkinning;
@@ -29,6 +40,15 @@ out vec2 v_TexCoord;
 
 void main()
 {
+    // Select model/normal matrix: instanced or uniform
+#ifdef FEATURE_INSTANCED
+    mat4 modelMatrix = mat4(a_InstanceModelCol0, a_InstanceModelCol1, a_InstanceModelCol2, a_InstanceModelCol3);
+    mat3 normalMatrix = mat3(a_InstanceNormalCol0, a_InstanceNormalCol1, a_InstanceNormalCol2);
+#else
+    mat4 modelMatrix = u_Model;
+    mat3 normalMatrix = u_NormalMatrix;
+#endif
+
     vec3 localPos = a_Position;
     vec3 localNormal = a_Normal;
 
@@ -41,9 +61,9 @@ void main()
         localNormal = mat3(skin) * a_Normal;
     }
 
-    vec4 worldPos = u_Model * vec4(localPos, 1.0);
+    vec4 worldPos = modelMatrix * vec4(localPos, 1.0);
     v_WorldPos = worldPos.xyz;
-    v_Normal = normalize(u_NormalMatrix * localNormal);
+    v_Normal = normalize(normalMatrix * localNormal);
     v_TexCoord = a_TexCoord;
     gl_Position = u_Projection * u_View * worldPos;
 }
@@ -62,6 +82,7 @@ const GBUFFER_FRAGMENT_SHADER = """
 // #define FEATURE_CLEARCOAT
 // #define FEATURE_PARALLAX_MAPPING
 // #define FEATURE_SUBSURFACE
+// #define FEATURE_LOD_DITHER
 
 in vec3 v_WorldPos;
 in vec3 v_Normal;
@@ -117,6 +138,10 @@ uniform float u_ParallaxScale;
 
 #ifdef FEATURE_SUBSURFACE
 uniform float u_Subsurface;
+#endif
+
+#ifdef FEATURE_LOD_DITHER
+uniform float u_LODAlpha;
 #endif
 
 // Parallax Occlusion Mapping
@@ -217,6 +242,25 @@ void main()
 #ifdef FEATURE_ALPHA_CUTOFF
     if (alpha < u_AlphaCutoff)
         discard;
+#endif
+
+#ifdef FEATURE_LOD_DITHER
+    // LOD dither crossfade: Bayer 4x4 ordered dithering
+    // u_LODAlpha = 1.0 means fully opaque for this LOD level,
+    // values < 1.0 progressively discard more fragments via dither pattern
+    {
+        const float bayerMatrix[16] = float[16](
+             0.0/16.0,  8.0/16.0,  2.0/16.0, 10.0/16.0,
+            12.0/16.0,  4.0/16.0, 14.0/16.0,  6.0/16.0,
+             3.0/16.0, 11.0/16.0,  1.0/16.0,  9.0/16.0,
+            15.0/16.0,  7.0/16.0, 13.0/16.0,  5.0/16.0
+        );
+        int bx = int(mod(gl_FragCoord.x, 4.0));
+        int by = int(mod(gl_FragCoord.y, 4.0));
+        float threshold = bayerMatrix[by * 4 + bx];
+        if (u_LODAlpha < threshold)
+            discard;
+    }
 #endif
 
     // Sample metallic and roughness
@@ -637,6 +681,8 @@ mutable struct DeferredPipeline <: AbstractDeferredPipeline
     taa_pass::Union{TAAPass, Nothing}
     quad_vao::GLuint
     quad_vbo::GLuint
+    placeholder_cubemap::GLuint   # 1x1 black cubemap for unused samplerCube uniforms
+    placeholder_2d::GLuint        # 1x1 black texture for unused sampler2D uniforms
 
     DeferredPipeline() = new(
         GBuffer(),
@@ -647,6 +693,8 @@ mutable struct DeferredPipeline <: AbstractDeferredPipeline
         nothing,
         nothing,
         nothing,
+        GLuint(0),
+        GLuint(0),
         GLuint(0),
         GLuint(0)
     )
@@ -715,6 +763,31 @@ function create_deferred_pipeline!(pipeline::DeferredPipeline, width::Int, heigh
 
     glBindVertexArray(GLuint(0))
 
+    # Create placeholder textures for unused samplers (prevents GL_INVALID_OPERATION
+    # when samplerCube uniforms default to texture units with GL_TEXTURE_2D bound)
+    black_pixel = Float32[0.0, 0.0, 0.0, 1.0]
+
+    cube_ref = Ref(GLuint(0))
+    glGenTextures(1, cube_ref)
+    pipeline.placeholder_cubemap = cube_ref[]
+    glBindTexture(GL_TEXTURE_CUBE_MAP, pipeline.placeholder_cubemap)
+    for face in 0:5
+        glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + UInt32(face), 0, GL_RGBA16F, 1, 1, 0, GL_RGBA, GL_FLOAT, black_pixel)
+    end
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE)
+
+    tex2d_ref = Ref(GLuint(0))
+    glGenTextures(1, tex2d_ref)
+    pipeline.placeholder_2d = tex2d_ref[]
+    glBindTexture(GL_TEXTURE_2D, pipeline.placeholder_2d)
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RG16F, 1, 1, 0, GL_RG, GL_FLOAT, Float32[0.0, 0.0])
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+
     # Create SSR pass (optional, can be enabled/disabled)
     pipeline.ssr_pass = SSRPass(width=width, height=height)
     create_ssr_pass!(pipeline.ssr_pass, width, height)
@@ -758,6 +831,15 @@ function destroy_deferred_pipeline!(pipeline::DeferredPipeline)
     if pipeline.quad_vbo != GLuint(0)
         glDeleteBuffers(1, Ref(pipeline.quad_vbo))
         pipeline.quad_vbo = GLuint(0)
+    end
+
+    if pipeline.placeholder_cubemap != GLuint(0)
+        glDeleteTextures(1, Ref(pipeline.placeholder_cubemap))
+        pipeline.placeholder_cubemap = GLuint(0)
+    end
+    if pipeline.placeholder_2d != GLuint(0)
+        glDeleteTextures(1, Ref(pipeline.placeholder_2d))
+        pipeline.placeholder_2d = GLuint(0)
     end
 
     if pipeline.ssr_pass !== nothing

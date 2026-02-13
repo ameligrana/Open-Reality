@@ -80,6 +80,20 @@ Abstract temporal anti-aliasing pass.
 abstract type AbstractTAAPass end
 
 """
+    AbstractDOFPass
+
+Abstract depth-of-field post-processing pass.
+"""
+abstract type AbstractDOFPass end
+
+"""
+    AbstractMotionBlurPass
+
+Abstract motion blur post-processing pass.
+"""
+abstract type AbstractMotionBlurPass end
+
+"""
     AbstractPostProcessPipeline
 
 Abstract post-processing pipeline (bloom, tone mapping, FXAA).

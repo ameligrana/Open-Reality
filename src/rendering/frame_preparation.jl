@@ -34,6 +34,8 @@ struct EntityRenderData
     mesh::MeshComponent
     model::Mat4f
     normal_matrix::SMatrix{3, 3, Float32, 9}
+    lod_crossfade::Float32                         # 1.0 = no crossfade, <1.0 = transitioning
+    lod_next_mesh::Union{MeshComponent, Nothing}   # Second mesh during LOD crossfade
 end
 
 """
@@ -179,6 +181,22 @@ function prepare_frame(scene::Scene, bounds_cache::Dict{EntityID, BoundingSphere
             return  # culled
         end
 
+        # LOD selection: swap mesh if entity has LODComponent
+        render_mesh = mesh
+        lod_crossfade = 1.0f0
+        lod_next_mesh = nothing
+        lod = get_component(entity_id, LODComponent)
+        if lod !== nothing && !isempty(lod.levels)
+            dx = world_center[1] - cam_pos[1]
+            dy = world_center[2] - cam_pos[2]
+            dz = world_center[3] - cam_pos[3]
+            cam_distance = sqrt(dx*dx + dy*dy + dz*dz)
+            selection = select_lod_level(lod, cam_distance, entity_id)
+            render_mesh = selection.mesh
+            lod_crossfade = selection.crossfade_alpha
+            lod_next_mesh = selection.next_mesh
+        end
+
         # Normal matrix
         model3 = SMatrix{3, 3, Float32, 9}(
             model[1,1], model[2,1], model[3,1],
@@ -196,9 +214,9 @@ function prepare_frame(scene::Scene, bounds_cache::Dict{EntityID, BoundingSphere
             dy = world_center[2] - cam_pos[2]
             dz = world_center[3] - cam_pos[3]
             dist_sq = dx*dx + dy*dy + dz*dz
-            push!(transparent_entities, TransparentEntityData(entity_id, mesh, model, normal_matrix, dist_sq))
+            push!(transparent_entities, TransparentEntityData(entity_id, render_mesh, model, normal_matrix, dist_sq))
         else
-            push!(opaque_entities, EntityRenderData(entity_id, mesh, model, normal_matrix))
+            push!(opaque_entities, EntityRenderData(entity_id, render_mesh, model, normal_matrix, lod_crossfade, lod_next_mesh))
         end
     end
 

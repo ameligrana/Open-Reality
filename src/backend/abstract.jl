@@ -393,3 +393,47 @@ Return the backend's input state for player controllers.
 function backend_get_input(backend::AbstractBackend)
     error("backend_get_input not implemented for $(typeof(backend))")
 end
+
+# ---- Instanced rendering ----
+
+"""
+    backend_draw_mesh_instanced!(backend, gpu_mesh, instance_count)
+
+Issue an instanced draw call for the given GPU mesh.
+"""
+function backend_draw_mesh_instanced!(backend::AbstractBackend, gpu_mesh::AbstractGPUMesh, instance_count::Int)
+    error("backend_draw_mesh_instanced! not implemented for $(typeof(backend))")
+end
+
+# ---- Depth of Field ----
+
+"""
+    backend_create_dof_pass!(backend, width, height) -> AbstractDOFPass
+
+Create a depth-of-field post-processing pass.
+"""
+function backend_create_dof_pass!(backend::AbstractBackend, width::Int, height::Int)
+    error("backend_create_dof_pass! not implemented for $(typeof(backend))")
+end
+
+# ---- Motion Blur ----
+
+"""
+    backend_create_motion_blur_pass!(backend, width, height) -> AbstractMotionBlurPass
+
+Create a motion blur post-processing pass.
+"""
+function backend_create_motion_blur_pass!(backend::AbstractBackend, width::Int, height::Int)
+    error("backend_create_motion_blur_pass! not implemented for $(typeof(backend))")
+end
+
+# ---- Terrain ----
+
+"""
+    backend_render_terrain!(backend, terrain_data, view, proj, cam_pos, texture_cache)
+
+Render terrain chunks to the current framebuffer (typically G-Buffer).
+"""
+function backend_render_terrain!(backend::AbstractBackend, terrain_data, view, proj, cam_pos, texture_cache)
+    error("backend_render_terrain! not implemented for $(typeof(backend))")
+end

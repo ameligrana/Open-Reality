@@ -600,6 +600,106 @@ function _collide_shapes(sa::CompoundShape, pos_a::Vec3d, rot_a::Quaternion{Floa
                               eid_a, eid_b, true)
 end
 
+# ---- Heightmap collision ----
+
+# Sphere vs HeightmapShape
+function _collide_shapes(sa::SphereShape, pos_a::Vec3d, rot_a::Quaternion{Float64}, scl_a::Vec3d, off_a::Vec3f,
+                          sb::HeightmapShape, pos_b::Vec3d, rot_b::Quaternion{Float64}, scl_b::Vec3d, off_b::Vec3f,
+                          eid_a::EntityID, eid_b::EntityID)
+    off = Vec3d(Float64(off_a[1]), Float64(off_a[2]), Float64(off_a[3]))
+    sphere_center = pos_a + off .* scl_a
+    r = Float64(sa.radius) * max(scl_a[1], scl_a[2], scl_a[3])
+
+    # Query terrain height at sphere XZ
+    td = get(_TERRAIN_CACHE, sb.terrain_entity_id, nothing)
+    td === nothing && return nothing
+    comp = get_component(sb.terrain_entity_id, TerrainComponent)
+    comp === nothing && return nothing
+
+    terrain_height = heightmap_get_height(td, comp, sphere_center[1], sphere_center[3])
+    terrain_y = pos_b[2] + terrain_height * scl_b[2]
+
+    penetration = terrain_y + r - sphere_center[2]
+    if penetration > 0.0
+        normal = Vec3d(0.0, 1.0, 0.0)
+        contact_point = Vec3d(sphere_center[1], terrain_y, sphere_center[3])
+        return ContactManifold(
+            eid_a, eid_b, normal, Float64(penetration),
+            [ContactPoint(contact_point, penetration)]
+        )
+    end
+    return nothing
+end
+
+# HeightmapShape vs Sphere (reverse)
+function _collide_shapes(sa::HeightmapShape, pos_a::Vec3d, rot_a::Quaternion{Float64}, scl_a::Vec3d, off_a::Vec3f,
+                          sb::SphereShape, pos_b::Vec3d, rot_b::Quaternion{Float64}, scl_b::Vec3d, off_b::Vec3f,
+                          eid_a::EntityID, eid_b::EntityID)
+    result = _collide_shapes(sb, pos_b, rot_b, scl_b, off_b,
+                              sa, pos_a, rot_a, scl_a, off_a,
+                              eid_b, eid_a)
+    if result !== nothing
+        return ContactManifold(eid_a, eid_b, -result.normal, result.penetration, result.points)
+    end
+    return nothing
+end
+
+# AABB vs HeightmapShape
+function _collide_shapes(sa::AABBShape, pos_a::Vec3d, rot_a::Quaternion{Float64}, scl_a::Vec3d, off_a::Vec3f,
+                          sb::HeightmapShape, pos_b::Vec3d, rot_b::Quaternion{Float64}, scl_b::Vec3d, off_b::Vec3f,
+                          eid_a::EntityID, eid_b::EntityID)
+    off = Vec3d(Float64(off_a[1]), Float64(off_a[2]), Float64(off_a[3]))
+    center = pos_a + off .* scl_a
+    he = Vec3d(Float64(sa.half_extents[1]) * scl_a[1],
+               Float64(sa.half_extents[2]) * scl_a[2],
+               Float64(sa.half_extents[3]) * scl_a[3])
+
+    td = get(_TERRAIN_CACHE, sb.terrain_entity_id, nothing)
+    td === nothing && return nothing
+    comp = get_component(sb.terrain_entity_id, TerrainComponent)
+    comp === nothing && return nothing
+
+    # Sample terrain height at AABB bottom center and 4 corners
+    bottom_y = center[2] - he[2]
+    sample_points = [
+        (center[1], center[3]),
+        (center[1] - he[1], center[3] - he[3]),
+        (center[1] + he[1], center[3] - he[3]),
+        (center[1] - he[1], center[3] + he[3]),
+        (center[1] + he[1], center[3] + he[3]),
+    ]
+
+    max_pen = 0.0
+    contacts = ContactPoint[]
+    for (sx, sz) in sample_points
+        th = heightmap_get_height(td, comp, sx, sz)
+        terrain_y = pos_b[2] + th * scl_b[2]
+        pen = terrain_y - bottom_y
+        if pen > 0.0
+            push!(contacts, ContactPoint(Vec3d(sx, terrain_y, sz), pen))
+            max_pen = max(max_pen, pen)
+        end
+    end
+
+    if !isempty(contacts)
+        return ContactManifold(eid_a, eid_b, Vec3d(0.0, 1.0, 0.0), max_pen, contacts)
+    end
+    return nothing
+end
+
+# HeightmapShape vs AABB (reverse)
+function _collide_shapes(sa::HeightmapShape, pos_a::Vec3d, rot_a::Quaternion{Float64}, scl_a::Vec3d, off_a::Vec3f,
+                          sb::AABBShape, pos_b::Vec3d, rot_b::Quaternion{Float64}, scl_b::Vec3d, off_b::Vec3f,
+                          eid_a::EntityID, eid_b::EntityID)
+    result = _collide_shapes(sb, pos_b, rot_b, scl_b, off_b,
+                              sa, pos_a, rot_a, scl_a, off_a,
+                              eid_b, eid_a)
+    if result !== nothing
+        return ContactManifold(eid_a, eid_b, -result.normal, result.penetration, result.points)
+    end
+    return nothing
+end
+
 # Fallback for unknown shape pairs
 function _collide_shapes(sa::ColliderShape, pos_a::Vec3d, rot_a::Quaternion{Float64}, scl_a::Vec3d, off_a::Vec3f,
                           sb::ColliderShape, pos_b::Vec3d, rot_b::Quaternion{Float64}, scl_b::Vec3d, off_b::Vec3f,

@@ -123,6 +123,17 @@ function run_render_loop!(scene::Scene;
             # Particle step (emission, simulation, billboard generation)
             update_particles!(dt)
 
+            # Terrain step (initialize new terrains, update chunk LODs)
+            _cam_id = find_active_camera()
+            if _cam_id !== nothing
+                _cam_world = get_world_transform(_cam_id)
+                _cam_pos = Vec3f(Float32(_cam_world[1, 4]), Float32(_cam_world[2, 4]), Float32(_cam_world[3, 4]))
+                _view = get_view_matrix(_cam_id)
+                _proj = get_projection_matrix(_cam_id)
+                _frustum = extract_frustum(_proj * _view)
+                update_terrain!(_cam_pos, _frustum)
+            end
+
             # render_frame! handles 3D rendering + UI + swap_buffers
             render_frame!(backend, scene)
         end
@@ -134,6 +145,8 @@ function run_render_loop!(scene::Scene;
         end
         shutdown_particle_renderer!()
         reset_particle_pools!()
+        reset_terrain_cache!()
+        reset_terrain_gpu_caches!()
         shutdown_audio!()
         shutdown!(backend)
     end

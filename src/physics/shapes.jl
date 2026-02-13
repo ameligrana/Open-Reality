@@ -390,6 +390,19 @@ function compute_world_aabb(shape::CompoundShape, position::Vec3d, rotation::Qua
     return AABB3D(min_pt, max_pt)
 end
 
+function compute_world_aabb(shape::HeightmapShape, position::Vec3d, rotation::Quaternion{Float64},
+                            scale::Vec3d, offset::Vec3f)
+    off = Vec3d(Float64(offset[1]), Float64(offset[2]), Float64(offset[3]))
+    center = position + off .* scale
+    half_x = Float64(shape.terrain_size[1]) * 0.5 * scale[1]
+    half_z = Float64(shape.terrain_size[2]) * 0.5 * scale[3]
+    h = Float64(shape.max_height) * scale[2]
+    return AABB3D(
+        Vec3d(center[1] - half_x, center[2], center[3] - half_z),
+        Vec3d(center[1] + half_x, center[2] + h, center[3] + half_z)
+    )
+end
+
 function gjk_support(shape::CompoundShape, position::Vec3d, rotation::Quaternion{Float64},
                      scale::Vec3d, offset::Vec3f, direction::Vec3d)
     off = Vec3d(Float64(offset[1]), Float64(offset[2]), Float64(offset[3]))

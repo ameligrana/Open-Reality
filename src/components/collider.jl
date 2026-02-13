@@ -95,3 +95,16 @@ function sphere_collider_from_mesh(mesh::MeshComponent)
 
     return ColliderComponent(shape=SphereShape(sqrt(max_dist_sq)), offset=center)
 end
+
+"""
+    HeightmapShape <: ColliderShape
+
+Collision shape backed by a terrain heightmap. Used for terrain physics.
+Stores a reference to the entity ID whose TerrainData/TerrainComponent
+provides the heightmap data.
+"""
+struct HeightmapShape <: ColliderShape
+    terrain_entity_id::EntityID
+    terrain_size::Vec2f       # World-space X, Z dimensions
+    max_height::Float32
+end

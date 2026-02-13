@@ -17,6 +17,9 @@ Each feature adds a #define to the shader compilation.
     FEATURE_CLEARCOAT
     FEATURE_PARALLAX_MAPPING
     FEATURE_SUBSURFACE
+    FEATURE_LOD_DITHER
+    FEATURE_INSTANCED
+    FEATURE_TERRAIN_SPLATMAP
 end
 
 """

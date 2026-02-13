@@ -44,6 +44,7 @@ include("components/material.jl")
 include("components/camera.jl")
 include("components/lights.jl")
 include("components/primitives.jl")
+include("components/lod.jl")
 include("components/player.jl")
 include("components/collider.jl")
 
@@ -56,6 +57,7 @@ include("components/animation.jl")
 include("components/audio.jl")
 include("components/skeleton.jl")
 include("components/particle_system.jl")
+include("components/terrain.jl")
 
 # Physics engine (after rigidbody — solver/world use RigidBodyComponent)
 include("physics/inertia.jl")
@@ -111,6 +113,9 @@ include("rendering/shadow_map.jl")         # pure math (compute_light_space_matr
 include("rendering/csm.jl")               # pure math (cascade computation)
 include("rendering/camera_utils.jl")
 include("rendering/frustum_culling.jl")
+include("rendering/lod.jl")
+include("rendering/terrain.jl")
+include("systems/terrain.jl")
 
 # Abstract backend interface
 include("backend/abstract.jl")
@@ -126,14 +131,19 @@ include("backend/opengl/opengl_ssao.jl")          # SSAOPass
 include("backend/opengl/opengl_ssr.jl")           # SSRPass
 include("backend/opengl/opengl_taa.jl")           # TAAPass
 include("backend/opengl/opengl_pbr.jl")           # PBR shaders, upload_lights!
+include("backend/opengl/opengl_dof.jl")            # DOFPass
+include("backend/opengl/opengl_motion_blur.jl")    # MotionBlurPass
 include("backend/opengl/opengl_postprocess.jl")   # PostProcessPipeline
 include("backend/opengl/opengl_deferred.jl")      # DeferredPipeline
 include("backend/opengl/opengl_ui.jl")            # UIRenderer, render_ui!
+include("backend/opengl/opengl_instancing.jl")   # Instanced rendering
+include("backend/opengl/opengl_terrain.jl")      # Terrain renderer
 include("backend/opengl/opengl_particles.jl")    # Particle renderer
 include("backend/opengl.jl")                      # OpenGLBackend, render_frame!
 
 # Shared rendering orchestration (after backend — uses ECS + frustum culling)
 include("rendering/frame_preparation.jl")
+include("rendering/instancing.jl")    # After frame_preparation — uses EntityRenderData
 
 # Metal backend implementation (macOS only, after frame_preparation — uses FrameLightData)
 if Sys.isapple()
@@ -235,11 +245,21 @@ export CameraComponent
 export PointLightComponent, DirectionalLightComponent, IBLComponent
 export cube_mesh, sphere_mesh, plane_mesh
 export PlayerComponent, create_player
+export LODComponent, LODLevel, LODTransitionMode, LOD_TRANSITION_INSTANT, LOD_TRANSITION_DITHER
+export LODSelection, select_lod_level, reset_lod_cache!
 export PlayerController, find_player_and_camera, update_player!
+
+# Export Terrain
+export TerrainComponent, HeightmapSource, HeightmapSourceType, TerrainLayer
+export HEIGHTMAP_IMAGE, HEIGHTMAP_PERLIN, HEIGHTMAP_FLAT
+export TerrainChunk, TerrainData
+export initialize_terrain!, update_terrain_lod!, update_terrain!
+export heightmap_get_height, is_aabb_in_frustum
+export perlin_noise_2d, fbm_noise_2d, reset_terrain_cache!
 
 # Export Physics Components
 export ColliderComponent, ColliderShape, AABBShape, SphereShape, CapsuleShape, CapsuleAxis
-export OBBShape, ConvexHullShape, CompoundShape, CompoundChild
+export OBBShape, ConvexHullShape, CompoundShape, CompoundChild, HeightmapShape
 export CAPSULE_X, CAPSULE_Y, CAPSULE_Z
 export collider_from_mesh, sphere_collider_from_mesh
 export RigidBodyComponent, BodyType, BODY_STATIC, BODY_KINEMATIC, BODY_DYNAMIC
@@ -304,6 +324,8 @@ export extract_frustum, bounding_sphere_from_mesh, is_sphere_in_frustum
 # Export Post-Processing
 export Framebuffer, PostProcessConfig, PostProcessPipeline
 export ToneMappingMode, TONEMAP_REINHARD, TONEMAP_ACES, TONEMAP_UNCHARTED2
+export DOFPass, create_dof_pass!, destroy_dof_pass!, resize_dof_pass!, render_dof!
+export MotionBlurPass, create_motion_blur_pass!, destroy_motion_blur_pass!, resize_motion_blur_pass!, render_motion_blur!
 
 # Export Deferred Rendering
 export GBuffer, create_gbuffer!, destroy_gbuffer!, resize_gbuffer!
@@ -312,6 +334,7 @@ export ShaderFeature, ShaderVariantKey, ShaderLibrary
 export FEATURE_ALBEDO_MAP, FEATURE_NORMAL_MAP, FEATURE_METALLIC_ROUGHNESS_MAP
 export FEATURE_AO_MAP, FEATURE_EMISSIVE_MAP, FEATURE_ALPHA_CUTOFF
 export FEATURE_CLEARCOAT, FEATURE_PARALLAX_MAPPING, FEATURE_SUBSURFACE
+export FEATURE_LOD_DITHER, FEATURE_INSTANCED, FEATURE_TERRAIN_SPLATMAP
 export get_or_compile_variant!, determine_shader_variant, destroy_shader_library!
 export DeferredPipeline, create_deferred_pipeline!, destroy_deferred_pipeline!, resize_deferred_pipeline!
 
@@ -333,6 +356,7 @@ export AbstractFramebuffer, AbstractGBuffer
 export AbstractShadowMap, AbstractCascadedShadowMap
 export AbstractIBLEnvironment
 export AbstractSSRPass, AbstractSSAOPass, AbstractTAAPass
+export AbstractDOFPass, AbstractMotionBlurPass
 export AbstractPostProcessPipeline, AbstractDeferredPipeline
 export AbstractGPUResourceCache, AbstractTextureCache
 export get_index_count, get_width, get_height
@@ -360,6 +384,12 @@ export backend_set_viewport!, backend_clear!, backend_set_depth_test!, backend_s
 export backend_set_cull_face!, backend_swap_buffers!, backend_draw_fullscreen_quad!, backend_blit_framebuffer!
 export backend_should_close, backend_poll_events!, backend_get_time
 export backend_capture_cursor!, backend_release_cursor!, backend_is_key_pressed, backend_get_input
+export backend_draw_mesh_instanced!
+
+# Export Instanced Rendering
+export InstanceBatchKey, InstanceBatch, group_into_batches
+export InstanceBuffer, upload_instance_data!, draw_instanced!, destroy_instance_buffer!
+export get_instance_buffer!, reset_instance_buffer!
 
 # Export Frame Preparation
 export FrameLightData, EntityRenderData, TransparentEntityData, FrameData
