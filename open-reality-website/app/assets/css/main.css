@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply bg-or-bg text-or-text;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply font-sans antialiased;
+  }
+
+  ::selection {
+    @apply bg-or-green/20 text-or-green;
+  }
+
+  ::-webkit-scrollbar {
+    @apply w-2;
+  }
+
+  ::-webkit-scrollbar-track {
+    @apply bg-or-bg;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    @apply bg-or-border rounded-full;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-or-text-dim;
+  }
+}
+
+@layer components {
+  .terminal-prompt::before {
+    content: '$ ';
+    @apply text-or-green font-mono;
+  }
+}
