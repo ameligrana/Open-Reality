@@ -2,7 +2,7 @@
 
 A declarative, code-first game engine written in Julia.
 
-OpenReality provides AAA-quality rendering with a clean functional API. Define scenes as composable entity trees, attach PBR materials and physics, and render with a single function call — on OpenGL, Vulkan, or Metal.
+OpenReality provides AAA-quality rendering with a clean functional API. Define scenes as composable entity trees, attach PBR materials and physics, and render with a single function call — on OpenGL, Vulkan, WebGPU or Metal.
 
 ## Features
 
