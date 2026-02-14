@@ -16,19 +16,26 @@ OpenReality provides AAA-quality rendering with a clean functional API. Define s
 - Temporal Anti-Aliasing (TAA)
 - Post-processing: bloom, tone mapping (Reinhard, ACES, Uncharted2), FXAA
 - Advanced materials: clear coat, subsurface scattering, parallax occlusion mapping, emissive
+- CPU-simulated particle system with billboard rendering
+- Immediate-mode UI/HUD (text, buttons, progress bars, images)
+- LOD system with dithered crossfade transitions
+- Heightmap terrain with chunk-based LOD and splatmap layers
 
 **Engine**
 - Entity Component System with O(1) component operations
 - Immutable, functional scene graph
-- Three rendering backends: OpenGL, Metal (macOS), Vulkan (Linux/Windows)
+- Four rendering backends: OpenGL, Metal (macOS), Vulkan (Linux/Windows), WebGPU (experimental)
 - Full-featured impulse-based physics engine (PGS solver with warm-starting)
 - 6 collider shapes: AABB, Sphere, Capsule, OBB, ConvexHull, Compound
 - Joint constraints: ball-socket, distance, hinge, fixed, slider
 - Spatial hash broadphase, GJK+EPA narrowphase, raycasting, CCD
 - Trigger volumes, island-based sleeping, friction and restitution
 - Keyframe animation with step, linear, and cubic spline interpolation
+- Skeletal animation with vertex skinning (glTF 2.0 skin loading)
+- 3D positional audio (OpenAL) with spatial attenuation and Doppler effect
 - glTF 2.0 and OBJ model loading
 - Built-in FPS player controller
+- Scene export to binary ORSB format for web deployment
 
 ## Quick Start
 

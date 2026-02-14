@@ -392,6 +392,258 @@ MaterialComponent(
 
 ---
 
+## Tutorial 8: Audio
+
+Add 3D positional audio to your scene. You need an `AudioListenerComponent` (the "ears") and one or more `AudioSourceComponent` entities.
+
+```julia
+using OpenReality
+
+reset_entity_counter!()
+reset_component_stores!()
+
+s = scene([
+    # Player with audio listener — sound is heard from this entity's position
+    entity([
+        PlayerComponent(),
+        transform(position=Vec3d(0, 1.7, 5)),
+        AudioListenerComponent(gain=1.0f0),
+        ColliderComponent(shape=AABBShape(Vec3f(0.3, 0.9, 0.3))),
+        RigidBodyComponent(body_type=BODY_KINEMATIC)
+    ], children=[
+        entity([CameraComponent(), transform()])
+    ]),
+
+    entity([DirectionalLightComponent(direction=Vec3f(0.3, -1.0, -0.5), intensity=2.0f0)]),
+
+    # A looping sound source — gets louder as you walk toward it
+    entity([
+        cube_mesh(),
+        MaterialComponent(color=RGB{Float32}(0.2, 0.8, 0.9), metallic=0.5f0, roughness=0.3f0),
+        transform(position=Vec3d(0, 1, 0)),
+        AudioSourceComponent(
+            audio_path="sounds/ambient.wav",
+            playing=true,
+            looping=true,
+            gain=1.0f0,
+            spatial=true,
+            reference_distance=2.0f0,
+            max_distance=50.0f0,
+            rolloff_factor=1.0f0
+        )
+    ]),
+
+    # Floor
+    entity([
+        plane_mesh(width=20.0f0, depth=20.0f0),
+        MaterialComponent(color=RGB{Float32}(0.5, 0.5, 0.5), roughness=0.9f0),
+        transform()
+    ])
+])
+
+render(s)
+```
+
+Key concepts:
+- **`spatial=true`**: Sound attenuates with distance (3D positional audio).
+- **`spatial=false`**: Sound plays at constant volume regardless of position (e.g. background music).
+- **`reference_distance`**: Distance at which gain is 1.0 (no attenuation). Closer than this, sound is at full volume.
+- **`max_distance`**: Beyond this distance, no further attenuation occurs.
+- **`rolloff_factor`**: How quickly sound fades. Higher values = faster falloff.
+- Audio files must be `.wav` format (mono or stereo, 8-bit or 16-bit PCM).
+
+---
+
+## Tutorial 9: UI / HUD
+
+Overlay 2D elements on top of the 3D scene by passing a `ui` callback to `render()`.
+
+```julia
+using OpenReality
+
+reset_entity_counter!()
+reset_component_stores!()
+
+s = scene([
+    create_player(position=Vec3d(0, 1.7, 5)),
+    entity([DirectionalLightComponent(direction=Vec3f(0.3, -1.0, -0.5), intensity=2.0f0)]),
+    entity([
+        cube_mesh(),
+        MaterialComponent(color=RGB{Float32}(0.9, 0.1, 0.1), metallic=0.5f0, roughness=0.3f0),
+        transform(position=Vec3d(0, 0.5, 0))
+    ]),
+    entity([
+        plane_mesh(width=20.0f0, depth=20.0f0),
+        MaterialComponent(color=RGB{Float32}(0.5, 0.5, 0.5), roughness=0.9f0),
+        transform()
+    ])
+])
+
+health = 0.75
+
+render(s, ui = function(ctx)
+    # Title text (top-left corner)
+    ui_text(ctx, "My Game", x=10, y=10, size=32,
+            color=RGB{Float32}(1, 1, 1))
+
+    # Health bar
+    ui_text(ctx, "HP", x=10, y=60, size=18,
+            color=RGB{Float32}(0.8, 0.8, 0.8))
+    ui_progress_bar(ctx, health,
+                    x=40, y=58, width=200, height=20,
+                    color=RGB{Float32}(0.2, 0.8, 0.2),
+                    bg_color=RGB{Float32}(0.3, 0.1, 0.1))
+
+    # A clickable button
+    if ui_button(ctx, "Reset", x=10, y=100, width=100, height=30,
+                 color=RGB{Float32}(0.3, 0.3, 0.6),
+                 hover_color=RGB{Float32}(0.4, 0.4, 0.8))
+        health = 1.0
+    end
+
+    # Semi-transparent background panel
+    ui_rect(ctx, x=10, y=150, width=220, height=40,
+            color=RGB{Float32}(0, 0, 0), alpha=0.5f0)
+    ui_text(ctx, "Score: 1250", x=20, y=160, size=24,
+            color=RGB{Float32}(1, 0.9, 0.3))
+end)
+```
+
+Key concepts:
+- The `ui` callback is called **every frame**. It's immediate-mode — you rebuild the UI each frame.
+- Coordinates are in screen pixels, with `(0, 0)` at the top-left.
+- `ui_button` returns `true` on the frame it is clicked.
+- Use `ui_rect` with low `alpha` for background panels.
+- Text rendering uses a FreeType font atlas, generated on demand.
+
+---
+
+## Tutorial 10: Particle Systems
+
+Add particle effects to entities. Particles are CPU-simulated and rendered as camera-facing billboards.
+
+```julia
+using OpenReality
+
+reset_entity_counter!()
+reset_component_stores!()
+
+s = scene([
+    create_player(position=Vec3d(0, 1.7, 8)),
+    entity([DirectionalLightComponent(direction=Vec3f(0.3, -1.0, -0.5), intensity=2.0f0)]),
+
+    # Fire-like particle fountain
+    entity([
+        transform(position=Vec3d(0, 0.5, 0)),
+        ParticleSystemComponent(
+            max_particles=512,
+            emission_rate=60.0f0,
+            lifetime_min=0.5f0,
+            lifetime_max=1.5f0,
+            velocity_min=Vec3f(-0.3, 2.0, -0.3),
+            velocity_max=Vec3f(0.3, 4.0, 0.3),
+            gravity_modifier=0.3f0,
+            start_size_min=0.1f0,
+            start_size_max=0.2f0,
+            end_size=0.0f0,
+            start_color=RGB{Float32}(1.0, 0.8, 0.2),
+            end_color=RGB{Float32}(1.0, 0.1, 0.0),
+            start_alpha=1.0f0,
+            end_alpha=0.0f0,
+            additive=true
+        )
+    ]),
+
+    # Smoke-like particles (slower, larger, alpha blend)
+    entity([
+        transform(position=Vec3d(3, 0.5, 0)),
+        ParticleSystemComponent(
+            max_particles=128,
+            emission_rate=10.0f0,
+            lifetime_min=2.0f0,
+            lifetime_max=4.0f0,
+            velocity_min=Vec3f(-0.2, 0.5, -0.2),
+            velocity_max=Vec3f(0.2, 1.5, 0.2),
+            gravity_modifier=-0.1f0,
+            damping=0.5f0,
+            start_size_min=0.2f0,
+            start_size_max=0.4f0,
+            end_size=1.5f0,
+            start_color=RGB{Float32}(0.5, 0.5, 0.5),
+            end_color=RGB{Float32}(0.3, 0.3, 0.3),
+            start_alpha=0.6f0,
+            end_alpha=0.0f0,
+            additive=false
+        )
+    ]),
+
+    # Floor
+    entity([
+        plane_mesh(width=20.0f0, depth=20.0f0),
+        MaterialComponent(color=RGB{Float32}(0.4, 0.4, 0.4), roughness=0.9f0),
+        transform()
+    ])
+])
+
+render(s, post_process=PostProcessConfig(
+    bloom_enabled=true, bloom_threshold=1.0f0, bloom_intensity=0.5f0,
+    tone_mapping=TONEMAP_ACES, fxaa_enabled=true
+))
+```
+
+Key concepts:
+- **`emission_rate`**: Continuous emission (particles/sec). Set to 0 for burst-only.
+- **`burst_count`**: Emit this many particles all at once on the first frame, then reset to 0.
+- **`gravity_modifier`**: Multiplier on world gravity. Negative values make particles rise.
+- **`damping`**: Slows particles over time (good for smoke).
+- **`additive=true`**: Particles add brightness (fire, sparks). `false` = standard alpha blend (smoke, dust).
+- Color and size lerp from start to end over each particle's lifetime.
+- Particles are billboarded (always face the camera).
+
+---
+
+## Tutorial 11: Skeletal Animation
+
+Load animated 3D characters from glTF 2.0 files. The loader extracts meshes, skeletons, and animation clips automatically.
+
+```julia
+using OpenReality
+
+reset_entity_counter!()
+reset_component_stores!()
+
+# Load a glTF model with skeleton and animations
+model = load_model("assets/character.glb")
+
+s = scene([
+    create_player(position=Vec3d(0, 1.7, 5)),
+    entity([DirectionalLightComponent(direction=Vec3f(0.3, -1.0, -0.5), intensity=2.0f0)]),
+    entity([IBLComponent(environment_path="sky", intensity=0.8f0)]),
+    model...
+])
+
+render(s)
+```
+
+The glTF loader handles everything: meshes with bone weights/indices, `BoneComponent` entities in the skeleton hierarchy, `SkinnedMeshComponent` linking bones to the mesh, and `AnimationComponent` with keyframe clips.
+
+### How It Works
+
+1. **BoneComponent** — each bone is an entity with an inverse bind matrix and a bone index.
+2. **SkinnedMeshComponent** — attached to the mesh entity, references all bone entities. Each frame, the skinning system computes: `bone_matrix = inverse(mesh_world) * bone_world * inverse_bind`.
+3. **AnimationComponent** — drives bone transforms (position, rotation, scale) via keyframe interpolation.
+4. **MeshComponent** — contains `bone_weights` and `bone_indices` per vertex (up to 4 bones per vertex).
+
+Animation playback is controlled via the `AnimationComponent`:
+- `playing` — start/stop
+- `looping` — loop when finished
+- `speed` — playback speed multiplier
+- `active_clip` — which animation clip to play (1-based index)
+
+Maximum 128 bones per skinned mesh.
+
+---
+
 ## Troubleshooting
 
 ### "GLFW not found" or window fails to open

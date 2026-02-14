@@ -9,7 +9,7 @@ This document describes how OpenReality is structured internally. It is intended
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                        User Code                            │
-│   scene([...])  →  render(scene, backend=..., ...)          │
+│  scene([...])  →  render(scene, backend=..., ui=..., ...)   │
 └──────────────────────────┬──────────────────────────────────┘
                            │
 ┌──────────────────────────▼──────────────────────────────────┐
@@ -22,10 +22,13 @@ This document describes how OpenReality is structured internally. It is intended
                            │
 ┌──────────────────────────▼──────────────────────────────────┐
 │                       Systems                                │
-│  ┌────────────────┐  ┌───────────┐  ┌────────────────────┐  │
-│  │ Player Control │  │ Animation │  │      Physics       │  │
-│  │player_controller│ │animation.jl│ │    physics.jl      │  │
-│  └────────────────┘  └───────────┘  └────────────────────┘  │
+│  ┌────────────┐ ┌──────────┐ ┌─────────┐ ┌──────────────┐  │
+│  │  Player    │ │Animation │ │ Physics │ │   Audio      │  │
+│  │ Controller │ │+ Skinning│ │         │ │  (OpenAL)    │  │
+│  └────────────┘ └──────────┘ └─────────┘ └──────────────┘  │
+│  ┌────────────┐ ┌──────────┐ ┌──────────────────────────┐  │
+│  │ Particles  │ │ Terrain  │ │     UI (immediate-mode)  │  │
+│  └────────────┘ └──────────┘ └──────────────────────────┘  │
 └──────────────────────────┬──────────────────────────────────┘
                            │
 ┌──────────────────────────▼──────────────────────────────────┐
@@ -39,10 +42,10 @@ This document describes how OpenReality is structured internally. It is intended
 ┌──────────────────────────▼──────────────────────────────────┐
 │                   Backend Abstraction                        │
 │                     abstract.jl                              │
-│  ┌──────────┐      ┌──────────┐      ┌──────────┐          │
-│  │  OpenGL  │      │  Metal   │      │  Vulkan  │          │
-│  │ 31 files │      │ 18 files │      │ 17 files │          │
-│  └──────────┘      └──────────┘      └──────────┘          │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌───────────┐  │
+│  │  OpenGL  │  │  Metal   │  │  Vulkan  │  │  WebGPU   │  │
+│  │ 31 files │  │ 18 files │  │ 17 files │  │(experiment)│  │
+│  └──────────┘  └──────────┘  └──────────┘  └───────────┘  │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -116,13 +119,18 @@ Parent-child relationships are stored in `hierarchy::Dict{EntityID, Vector{Entit
 2. System Updates (sequential)
    ├─ update_player!(controller, input, dt)
    ├─ update_animations!(dt)
-   └─ update_physics!(dt)
+   ├─ update_skinned_meshes!()
+   ├─ update_physics!(dt)
+   ├─ update_audio!(dt)
+   ├─ update_particles!(dt)
+   └─ update_terrain_lod!(scene)
 
 3. Frame Preparation (backend-agnostic)
    ├─ Find active camera → compute view + projection matrices
    ├─ Extract frustum planes
    ├─ Iterate entities with MeshComponent
    │   ├─ Frustum cull using bounding spheres
+   │   ├─ Select LOD level (if LODComponent present)
    │   ├─ Classify: opaque vs transparent
    │   └─ Sort transparent entities back-to-front
    ├─ Collect lights (directional, point, IBL)
@@ -131,13 +139,15 @@ Parent-child relationships are stored in `hierarchy::Dict{EntityID, Vector{Entit
 4. Backend Rendering
    ├─ CSM shadow depth passes (4 cascades)
    ├─ G-Buffer geometry pass (deferred)
+   ├─ Terrain G-Buffer pass (if TerrainComponent)
    ├─ Deferred lighting pass (fullscreen quad)
    ├─ Forward pass (transparent objects)
    ├─ SSAO pass
    ├─ SSR pass
    ├─ TAA pass
    ├─ Post-processing (bloom, tone mapping, FXAA)
-   └─ Final composite to screen
+   ├─ Particle rendering (camera-facing billboards)
+   └─ UI rendering (immediate-mode overlay)
 
 5. Swap Buffers
 ```
@@ -324,6 +334,118 @@ Interpolation modes: `INTERP_STEP` (snap), `INTERP_LINEAR` (lerp/slerp), `INTERP
 
 ---
 
+## Skinning System
+
+**File:** `src/systems/skinning.jl`
+
+Called once per frame via `update_skinned_meshes!()`. For each entity with a `SkinnedMeshComponent`, it computes the final bone transformation matrices:
+
+```
+bone_matrix[i] = inverse(mesh_world_transform) * bone_world_transform * inverse_bind_matrix
+```
+
+These matrices are uploaded to the vertex shader as a `mat4[128]` uniform array. The vertex shader performs linear blend skinning using up to 4 bone influences per vertex (weights + indices stored in `MeshComponent`).
+
+Maximum 128 bones per skinned mesh (`const MAX_BONES = 128`).
+
+---
+
+## Audio System
+
+**Files:** `src/systems/audio.jl`, `src/audio/openal_backend.jl`
+
+3D positional audio via OpenAL. The system follows a listener/source model:
+
+- **Listener**: One `AudioListenerComponent` per scene. Its entity's world transform sets the listener position and orientation (forward/up vectors derived from the transform's rotation).
+- **Sources**: Each `AudioSourceComponent` is an audio emitter. Its entity's world transform determines 3D position. OpenAL handles distance attenuation (inverse distance clamped model) and Doppler effect.
+
+**Per-frame flow (`update_audio!`):**
+1. Find the entity with `AudioListenerComponent` → sync position and orientation to OpenAL listener
+2. Iterate all `AudioSourceComponent` entities:
+   - Load `.wav` file on first use (via `get_or_load_buffer!`)
+   - Create OpenAL source on first use
+   - Sync position, gain, pitch, looping, and playback state
+3. Clean up sources for removed entities
+
+The OpenAL backend (`openal_backend.jl`) provides low-level wrappers around `ccall` to `libopenal`: device management, buffer loading, source control, and listener configuration.
+
+---
+
+## Particle System
+
+**Files:** `src/systems/particles.jl`, `src/components/particle_system.jl`
+
+CPU-simulated billboard particles with per-entity particle pools.
+
+**Architecture:**
+- `ParticleSystemComponent` defines emission parameters (rate, burst, velocity, gravity, color/size over lifetime)
+- `PARTICLE_POOLS::Dict{EntityID, ParticlePool}` stores per-entity particle arrays
+- Each `Particle` has: position, velocity, lifetime, max_lifetime, size, alive flag
+
+**Per-frame flow (`update_particles!`):**
+1. Emit new particles (continuous via `emission_rate` accumulator, or one-shot via `burst_count`)
+2. For each alive particle: advance lifetime, apply gravity (`gravity_modifier * (0, -9.81, 0)`), apply damping
+3. Kill expired particles (swap-and-pop removal)
+4. Generate billboard vertex data: two triangles per particle, oriented to face the camera using `cam_right` and `cam_up` vectors
+5. Lerp color and size from start→end based on lifetime fraction
+
+Rendering is handled separately by the backend's particle renderer (e.g., `opengl_particles.jl`), which uploads the vertex data and draws with appropriate blending (additive or alpha).
+
+---
+
+## UI System
+
+**Files:** `src/ui/types.jl`, `src/ui/font.jl`, `src/ui/widgets.jl`
+
+Immediate-mode UI rendered as a 2D overlay after the 3D scene. The user provides a callback function to `render()`:
+
+```julia
+render(scene, ui = ctx -> begin
+    ui_text(ctx, "Hello", x=10, y=10)
+end)
+```
+
+**Architecture:**
+- `UIContext` accumulates vertex data (8 floats per vertex: pos.xy, uv.xy, color.rgba) and draw commands during the callback
+- `UIDrawCommand` batches geometry by texture (solid color, font atlas, or image texture)
+- `FontAtlas` uses FreeType to rasterize glyphs into a texture atlas on demand
+- After the callback completes, the backend renders all draw commands with an orthographic projection
+
+**Input handling:** `UIContext` receives mouse position and click state from the backend each frame. `ui_button` uses this for hit-testing and hover detection.
+
+---
+
+## Terrain System
+
+**Files:** `src/components/terrain.jl`, `src/systems/terrain.jl`, `src/rendering/terrain.jl`
+
+Heightmap-based terrain with chunk-based LOD.
+
+**Architecture:**
+- `TerrainComponent` defines the heightmap source (image, Perlin noise, or flat), terrain dimensions, chunk size, and material layers
+- `initialize_terrain!()` generates height data and splits the terrain into chunks
+- `update_terrain_lod!()` selects per-chunk LOD based on camera distance
+- Each chunk is rendered as a separate mesh in the G-Buffer pass with splatmap-based texture blending (up to 4 layers)
+
+**Heightmap sources:**
+- `HEIGHTMAP_IMAGE` — load from a grayscale image file
+- `HEIGHTMAP_PERLIN` — procedural FBM noise with configurable octaves, frequency, and persistence
+- `HEIGHTMAP_FLAT` — flat terrain at height 0
+
+---
+
+## Scene Export
+
+**File:** `src/export/scene_export.jl`
+
+`export_scene()` serializes a scene to the ORSB (OpenReality Scene Binary) format for web deployment via WASM runtimes.
+
+**Format:** Header (magic `ORSB` + version) followed by typed sections. Each section has a type ID, size, and payload. Supported sections: entity graph, transforms, meshes, materials, textures, lights, cameras, colliders, rigidbodies, animations, skeletons, particles, physics config.
+
+Component presence is tracked via bitmask flags per entity, enabling compact serialization.
+
+---
+
 ## File Organization
 
 ```
@@ -339,9 +461,14 @@ src/
 │   ├── material.jl             # MaterialComponent (PBR)
 │   ├── camera.jl               # CameraComponent
 │   ├── lights.jl               # PointLight, DirectionalLight, IBL
-│   ├── collider.jl             # ColliderComponent, AABBShape, SphereShape
+│   ├── collider.jl             # ColliderComponent, AABBShape, SphereShape, ...
 │   ├── rigidbody.jl            # RigidBodyComponent, BodyType, CCDMode
 │   ├── animation.jl            # AnimationComponent, AnimationClip
+│   ├── skeleton.jl             # BoneComponent, SkinnedMeshComponent
+│   ├── audio.jl                # AudioListenerComponent, AudioSourceComponent
+│   ├── particle_system.jl      # ParticleSystemComponent
+│   ├── lod.jl                  # LODComponent, LODLevel, LODTransitionMode
+│   ├── terrain.jl              # TerrainComponent, HeightmapSource, TerrainLayer
 │   ├── primitives.jl           # cube_mesh, sphere_mesh, plane_mesh
 │   └── player.jl               # PlayerComponent, create_player
 │
@@ -351,6 +478,14 @@ src/
 ├── windowing/
 │   ├── glfw.jl                 # GLFW window management
 │   └── input.jl                # InputState (keyboard, mouse)
+│
+├── audio/
+│   └── openal_backend.jl       # OpenAL device/context/buffer/source wrappers
+│
+├── ui/
+│   ├── types.jl                # UIContext, UIDrawCommand, FontAtlas, GlyphInfo
+│   ├── font.jl                 # FreeType font rasterization + atlas packing
+│   └── widgets.jl              # ui_rect, ui_text, ui_button, ui_progress_bar, ui_image
 │
 ├── physics/
 │   ├── types.jl                # PhysicsWorldConfig, ContactPoint, ContactManifold
@@ -369,8 +504,12 @@ src/
 │   └── world.jl                # PhysicsWorld orchestrator
 │
 ├── systems/
-│   ├── physics.jl              # update_physics!(dt) API (delegates to PhysicsWorld)
-│   ├── animation.jl            # Animation update loop
+│   ├── physics.jl              # update_physics!(dt)
+│   ├── animation.jl            # update_animations!(dt)
+│   ├── skinning.jl             # update_skinned_meshes!()
+│   ├── audio.jl                # update_audio!(dt)
+│   ├── particles.jl            # update_particles!(dt)
+│   ├── terrain.jl              # update_terrain_lod!(scene)
 │   └── player_controller.jl    # FPS input handling
 │
 ├── rendering/
@@ -378,6 +517,7 @@ src/
 │   ├── pbr_pipeline.jl         # Main render loop (run_render_loop!)
 │   ├── frame_preparation.jl    # Backend-agnostic frame data
 │   ├── shader_variants.jl      # Shader permutation system
+│   ├── instancing.jl           # Instanced batching
 │   ├── frustum_culling.jl      # View frustum culling
 │   ├── camera_utils.jl         # Camera matrix helpers
 │   ├── csm.jl                  # Cascaded shadow maps
@@ -385,6 +525,8 @@ src/
 │   ├── ssao.jl                 # Screen-space ambient occlusion
 │   ├── ssr.jl                  # Screen-space reflections
 │   ├── taa.jl                  # Temporal anti-aliasing
+│   ├── lod.jl                  # LOD selection + dither transitions
+│   ├── terrain.jl              # Terrain chunk rendering
 │   ├── post_processing.jl      # Tone mapping, bloom, FXAA
 │   └── ...                     # Framebuffer, G-Buffer, etc.
 │
@@ -392,25 +534,32 @@ src/
 │   ├── abstract.jl             # AbstractBackend interface
 │   ├── gpu_types.jl            # Abstract GPU resource types
 │   ├── opengl/                 # OpenGL implementation (31 files)
-│   ├── metal/                  # Metal implementation (18 files)
-│   └── vulkan/                 # Vulkan implementation (17 files)
+│   ├── metal/                  # Metal implementation (18 files, macOS)
+│   ├── vulkan/                 # Vulkan implementation (17 files, Linux/Windows)
+│   └── webgpu/                 # WebGPU implementation (experimental, Rust FFI)
+│
+├── export/
+│   └── scene_export.jl         # ORSB binary scene export
 │
 └── loading/
     ├── loader.jl               # Format dispatcher
-    ├── gltf_loader.jl          # glTF 2.0 loader
+    ├── gltf_loader.jl          # glTF 2.0 loader (meshes, materials, skins, animations)
     └── obj_loader.jl           # OBJ loader
 
 examples/
 ├── basic_scene.jl              # Simple PBR scene
 ├── pbr_showcase.jl             # Advanced materials + post-processing
+├── features_showcase.jl        # Animation, shadows, lighting
 ├── boulder_scene.jl            # Primitives showcase
 ├── physics_demo.jl             # Physics engine showcase
 ├── vulkan_test.jl              # Vulkan backend test
+├── vulkan_minimal_test.jl      # Minimal Vulkan test
 ├── metal_test.jl               # Metal backend test
-└── vulkan_minimal_test.jl      # Minimal Vulkan test
+├── webgpu_test.jl              # WebGPU backend test
+└── wasm_export_test.jl         # ORSB scene export test
 
 test/
-└── runtests.jl                 # Test suite
+└── runtests.jl                 # Test suite (656 tests)
 ```
 
 ---
@@ -424,5 +573,9 @@ test/
 | **Observable transforms** | Reactive updates for debugging and future editor integration |
 | **Double-precision transforms** | Numerical stability for hierarchical transform chains; converted to float32 for GPU |
 | **Shader variants over uber-shaders** | Smaller shader programs, fewer GPU branches, better performance |
-| **Backend abstraction** | Single codebase supports OpenGL, Metal, and Vulkan without code duplication |
+| **Backend abstraction** | Single codebase supports OpenGL, Metal, Vulkan, and WebGPU without code duplication |
 | **Deferred + forward hybrid** | Efficient multi-light rendering for opaque geometry, correct blending for transparency |
+| **Immediate-mode UI** | Simple, stateless, rebuilt each frame; no retained widget tree to manage |
+| **CPU particle simulation** | Flexible, no GPU compute dependency; billboard vertex data uploaded each frame |
+| **OpenAL for audio** | Mature, cross-platform 3D positional audio with hardware acceleration |
+| **Binary scene export (ORSB)** | Compact, fast to load, suitable for WASM/web deployment |

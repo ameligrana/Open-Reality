@@ -557,3 +557,379 @@ entity([
                        velocity=Vec3d(50.0, 0.0, 0.0))
 ])
 ```
+
+---
+
+## 3D Audio
+
+Place spatial audio sources in the scene. Sound attenuates with distance from the listener.
+
+```julia
+using OpenReality
+
+reset_entity_counter!()
+reset_component_stores!()
+
+s = scene([
+    # Player with audio listener attached
+    entity([
+        PlayerComponent(),
+        transform(position=Vec3d(0, 1.7, 10)),
+        AudioListenerComponent(gain=1.0f0),
+        ColliderComponent(shape=AABBShape(Vec3f(0.3, 0.9, 0.3))),
+        RigidBodyComponent(body_type=BODY_KINEMATIC)
+    ], children=[
+        entity([CameraComponent(), transform()])
+    ]),
+
+    entity([DirectionalLightComponent(direction=Vec3f(0.3, -1.0, -0.5), intensity=2.0f0)]),
+
+    # Audio source on a visible object — walk toward it to hear it louder
+    entity([
+        sphere_mesh(radius=0.3f0),
+        MaterialComponent(
+            color=RGB{Float32}(0.2, 0.6, 1.0),
+            emissive_factor=Vec3f(0.5, 1.0, 2.0)   # Glowing to mark the source
+        ),
+        transform(position=Vec3d(0, 1.5, 0)),
+        AudioSourceComponent(
+            audio_path="sounds/loop.wav",
+            playing=true,
+            looping=true,
+            gain=1.0f0,
+            spatial=true,
+            reference_distance=2.0f0,
+            max_distance=40.0f0
+        )
+    ]),
+
+    # A second source further away, different sound
+    entity([
+        cube_mesh(),
+        MaterialComponent(
+            color=RGB{Float32}(1.0, 0.4, 0.2),
+            emissive_factor=Vec3f(2.0, 0.5, 0.1)
+        ),
+        transform(position=Vec3d(10, 1, -5)),
+        AudioSourceComponent(
+            audio_path="sounds/alert.wav",
+            playing=true,
+            looping=true,
+            gain=0.8f0,
+            spatial=true,
+            reference_distance=3.0f0,
+            max_distance=30.0f0,
+            rolloff_factor=1.5f0
+        )
+    ]),
+
+    # Floor
+    entity([
+        plane_mesh(width=40.0f0, depth=40.0f0),
+        MaterialComponent(color=RGB{Float32}(0.4, 0.4, 0.4), roughness=0.9f0),
+        transform()
+    ])
+])
+
+render(s, post_process=PostProcessConfig(
+    bloom_enabled=true, bloom_threshold=1.0f0,
+    tone_mapping=TONEMAP_ACES, fxaa_enabled=true
+))
+```
+
+Walk around the scene — sound pans left/right and gets louder/quieter based on distance.
+
+---
+
+## UI / HUD Overlay
+
+Add a game-style HUD with health bar, score, and a button.
+
+```julia
+using OpenReality
+
+reset_entity_counter!()
+reset_component_stores!()
+
+s = scene([
+    create_player(position=Vec3d(0, 1.7, 5)),
+    entity([DirectionalLightComponent(direction=Vec3f(0.3, -1.0, -0.5), intensity=2.0f0)]),
+
+    # Some scene geometry
+    entity([
+        cube_mesh(),
+        MaterialComponent(color=RGB{Float32}(0.8, 0.3, 0.1), metallic=0.5f0, roughness=0.3f0),
+        transform(position=Vec3d(0, 0.5, 0)),
+        ColliderComponent(shape=AABBShape(Vec3f(0.5, 0.5, 0.5))),
+        RigidBodyComponent(body_type=BODY_STATIC)
+    ]),
+    entity([
+        plane_mesh(width=20.0f0, depth=20.0f0),
+        MaterialComponent(color=RGB{Float32}(0.5, 0.5, 0.5), roughness=0.9f0),
+        transform()
+    ])
+])
+
+score = 0
+health = 0.8
+
+render(s, ui = function(ctx)
+    # Background panel
+    ui_rect(ctx, x=5, y=5, width=260, height=110,
+            color=RGB{Float32}(0, 0, 0), alpha=0.4f0)
+
+    # Score display
+    ui_text(ctx, "Score: $score", x=15, y=15, size=28,
+            color=RGB{Float32}(1.0, 0.9, 0.3))
+
+    # Health bar with label
+    ui_text(ctx, "HP", x=15, y=55, size=18,
+            color=RGB{Float32}(0.9, 0.9, 0.9))
+    ui_progress_bar(ctx, health,
+                    x=45, y=53, width=200, height=22,
+                    color=RGB{Float32}(0.1, 0.9, 0.2),
+                    bg_color=RGB{Float32}(0.4, 0.1, 0.1))
+
+    # Buttons
+    if ui_button(ctx, "+10 Score", x=15, y=85, width=110, height=25,
+                 color=RGB{Float32}(0.2, 0.5, 0.2),
+                 hover_color=RGB{Float32}(0.3, 0.7, 0.3))
+        score += 10
+    end
+
+    if ui_button(ctx, "Heal", x=135, y=85, width=110, height=25,
+                 color=RGB{Float32}(0.2, 0.2, 0.6),
+                 hover_color=RGB{Float32}(0.3, 0.3, 0.8))
+        health = min(1.0, health + 0.1)
+    end
+end)
+```
+
+The UI callback runs every frame. All positioning is in screen pixels from the top-left corner.
+
+---
+
+## Particle Effects
+
+Combine multiple particle systems for varied visual effects.
+
+```julia
+using OpenReality
+
+reset_entity_counter!()
+reset_component_stores!()
+
+s = scene([
+    create_player(position=Vec3d(0, 2, 10)),
+    entity([DirectionalLightComponent(direction=Vec3f(0.3, -1.0, -0.5), intensity=1.5f0)]),
+
+    # Fire particles (additive blending for bright glow)
+    entity([
+        transform(position=Vec3d(0, 0.2, 0)),
+        ParticleSystemComponent(
+            max_particles=512,
+            emission_rate=80.0f0,
+            lifetime_min=0.3f0,
+            lifetime_max=1.0f0,
+            velocity_min=Vec3f(-0.4, 2.0, -0.4),
+            velocity_max=Vec3f(0.4, 5.0, 0.4),
+            gravity_modifier=0.2f0,
+            start_size_min=0.08f0,
+            start_size_max=0.15f0,
+            end_size=0.0f0,
+            start_color=RGB{Float32}(1.0, 0.9, 0.3),
+            end_color=RGB{Float32}(1.0, 0.1, 0.0),
+            start_alpha=1.0f0,
+            end_alpha=0.0f0,
+            additive=true
+        )
+    ]),
+
+    # Smoke rising above the fire (alpha blending, slower, larger)
+    entity([
+        transform(position=Vec3d(0, 1.5, 0)),
+        ParticleSystemComponent(
+            max_particles=64,
+            emission_rate=5.0f0,
+            lifetime_min=3.0f0,
+            lifetime_max=5.0f0,
+            velocity_min=Vec3f(-0.3, 0.3, -0.3),
+            velocity_max=Vec3f(0.3, 1.0, 0.3),
+            gravity_modifier=-0.05f0,
+            damping=0.3f0,
+            start_size_min=0.3f0,
+            start_size_max=0.5f0,
+            end_size=2.0f0,
+            start_color=RGB{Float32}(0.4, 0.4, 0.4),
+            end_color=RGB{Float32}(0.2, 0.2, 0.2),
+            start_alpha=0.5f0,
+            end_alpha=0.0f0,
+            additive=false
+        )
+    ]),
+
+    # Spark burst (one-shot, then done)
+    entity([
+        transform(position=Vec3d(-4, 1, 0)),
+        ParticleSystemComponent(
+            max_particles=100,
+            emission_rate=0.0f0,
+            burst_count=100,
+            lifetime_min=0.5f0,
+            lifetime_max=1.5f0,
+            velocity_min=Vec3f(-3, 1, -3),
+            velocity_max=Vec3f(3, 6, 3),
+            gravity_modifier=1.0f0,
+            start_size_min=0.03f0,
+            start_size_max=0.06f0,
+            end_size=0.0f0,
+            start_color=RGB{Float32}(1.0, 0.8, 0.3),
+            end_color=RGB{Float32}(1.0, 0.3, 0.0),
+            start_alpha=1.0f0,
+            end_alpha=0.0f0,
+            additive=true
+        )
+    ]),
+
+    # Floor
+    entity([
+        plane_mesh(width=20.0f0, depth=20.0f0),
+        MaterialComponent(color=RGB{Float32}(0.3, 0.3, 0.3), roughness=0.95f0),
+        transform()
+    ])
+])
+
+render(s, post_process=PostProcessConfig(
+    bloom_enabled=true, bloom_threshold=0.8f0, bloom_intensity=0.5f0,
+    tone_mapping=TONEMAP_ACES, fxaa_enabled=true
+))
+```
+
+Tips:
+- Use `additive=true` for bright effects (fire, sparks, magic).
+- Use `additive=false` for opaque effects (smoke, dust, snow).
+- `burst_count` fires once; `emission_rate` emits continuously.
+- Negative `gravity_modifier` makes particles float upward.
+
+---
+
+## Skeletal Animation
+
+Load and display a skinned, animated character from a glTF file.
+
+```julia
+using OpenReality
+
+reset_entity_counter!()
+reset_component_stores!()
+
+# Load a glTF model with skeleton and animations
+# The loader extracts: meshes, bone hierarchy, skin data, animation clips
+model = load_model("assets/character.glb")
+
+s = scene([
+    create_player(position=Vec3d(0, 1.7, 5)),
+
+    entity([
+        DirectionalLightComponent(direction=Vec3f(0.3, -1.0, -0.5), intensity=2.5f0)
+    ]),
+    entity([
+        IBLComponent(environment_path="sky", intensity=0.8f0)
+    ]),
+
+    # Splat the model entities — includes skinned mesh, bones, and animations
+    model...,
+
+    # Floor
+    entity([
+        plane_mesh(width=20.0f0, depth=20.0f0),
+        MaterialComponent(color=RGB{Float32}(0.45, 0.45, 0.45), roughness=0.9f0),
+        transform(),
+        ColliderComponent(shape=AABBShape(Vec3f(10.0, 0.01, 10.0)), offset=Vec3f(0, -0.01, 0)),
+        RigidBodyComponent(body_type=BODY_STATIC)
+    ])
+])
+
+render(s, post_process=PostProcessConfig(
+    tone_mapping=TONEMAP_ACES, fxaa_enabled=true
+))
+```
+
+What the loader creates:
+- A hierarchy of bone entities with `BoneComponent` (inverse bind matrices)
+- A mesh entity with `MeshComponent` (includes `bone_weights` and `bone_indices`), `SkinnedMeshComponent` (links to bone entities), and `MaterialComponent`
+- An `AnimationComponent` with clips that drive bone transforms
+
+The engine automatically calls `update_animations!(dt)` and `update_skinned_meshes!()` each frame.
+
+---
+
+## Terrain
+
+Generate procedural terrain with Perlin noise and splatmap texturing.
+
+```julia
+using OpenReality
+
+reset_entity_counter!()
+reset_component_stores!()
+
+s = scene([
+    create_player(position=Vec3d(128, 30, 128)),
+
+    entity([
+        DirectionalLightComponent(direction=Vec3f(0.3, -1.0, -0.5), intensity=2.5f0)
+    ]),
+    entity([
+        IBLComponent(environment_path="sky", intensity=0.6f0)
+    ]),
+
+    # Procedural terrain
+    entity([
+        TerrainComponent(
+            heightmap=HeightmapSource(
+                source_type=HEIGHTMAP_PERLIN,
+                perlin_octaves=6,
+                perlin_frequency=0.008f0,
+                perlin_persistence=0.5f0,
+                perlin_seed=123
+            ),
+            terrain_size=Vec2f(256.0, 256.0),
+            max_height=40.0f0,
+            chunk_size=33,
+            num_lod_levels=3,
+            splatmap_path="textures/splatmap.png",
+            layers=[
+                TerrainLayer(
+                    albedo_path="textures/grass_albedo.png",
+                    normal_path="textures/grass_normal.png",
+                    uv_scale=15.0f0
+                ),
+                TerrainLayer(
+                    albedo_path="textures/rock_albedo.png",
+                    normal_path="textures/rock_normal.png",
+                    uv_scale=8.0f0
+                ),
+                TerrainLayer(
+                    albedo_path="textures/sand_albedo.png",
+                    normal_path="textures/sand_normal.png",
+                    uv_scale=20.0f0
+                )
+            ]
+        ),
+        transform()
+    ])
+])
+
+render(s, post_process=PostProcessConfig(
+    bloom_enabled=true, bloom_threshold=1.5f0,
+    ssao_enabled=true, ssao_radius=0.5f0,
+    tone_mapping=TONEMAP_ACES, fxaa_enabled=true
+))
+```
+
+Key concepts:
+- **Heightmap sources**: `HEIGHTMAP_PERLIN` (procedural), `HEIGHTMAP_IMAGE` (from file), `HEIGHTMAP_FLAT`
+- **Chunks**: The terrain is split into chunks for frustum culling and LOD selection
+- **Splatmap**: An RGBA texture where each channel controls the blend weight of a terrain layer (up to 4 layers)
+- **`uv_scale`**: Controls texture tiling frequency per layer

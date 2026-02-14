@@ -14,7 +14,8 @@ render(scene::Scene;
        width::Int = 1280,
        height::Int = 720,
        title::String = "OpenReality",
-       post_process::Union{PostProcessConfig, Nothing} = nothing)
+       post_process::Union{PostProcessConfig, Nothing} = nothing,
+       ui::Union{Function, Nothing} = nothing)
 ```
 
 Opens a window and starts the render loop for the given scene. Blocks until the window is closed.
@@ -22,11 +23,12 @@ Opens a window and starts the render loop for the given scene. Blocks until the 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `scene` | *(required)* | The scene to render |
-| `backend` | `OpenGLBackend()` | Rendering backend (`OpenGLBackend`, `VulkanBackend`, `MetalBackend`) |
+| `backend` | `OpenGLBackend()` | Rendering backend (`OpenGLBackend`, `VulkanBackend`, `MetalBackend`, `WebGPUBackend`) |
 | `width` | `1280` | Window width in pixels |
 | `height` | `720` | Window height in pixels |
 | `title` | `"OpenReality"` | Window title |
 | `post_process` | `nothing` | Post-processing configuration |
+| `ui` | `nothing` | UI callback function `(ctx::UIContext) -> nothing`, called every frame |
 
 ---
 
@@ -499,6 +501,250 @@ end
 
 ---
 
+### `AudioListenerComponent`
+
+```julia
+AudioListenerComponent(;
+    gain::Float32 = 1.0f0
+)
+```
+
+Marks an entity as the audio listener (i.e. the "ears" of the scene). There should be one per scene, typically attached to the player or camera entity. The listener's world transform determines the position and orientation for 3D audio.
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `gain` | `1.0` | Master volume (0.0 = silent, 1.0 = full) |
+
+---
+
+### `AudioSourceComponent`
+
+```julia
+AudioSourceComponent(;
+    audio_path::String = "",
+    playing::Bool = false,
+    looping::Bool = false,
+    gain::Float32 = 1.0f0,
+    pitch::Float32 = 1.0f0,
+    spatial::Bool = true,
+    reference_distance::Float32 = 1.0f0,
+    max_distance::Float32 = 100.0f0,
+    rolloff_factor::Float32 = 1.0f0
+)
+```
+
+Plays audio from a `.wav` file. The source's world transform determines its 3D position for spatial audio.
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `audio_path` | `""` | Path to a `.wav` audio file |
+| `playing` | `false` | Set to `true` to start playback |
+| `looping` | `false` | Loop the audio when it reaches the end |
+| `gain` | `1.0` | Volume (0.0 = silent, 1.0 = full) |
+| `pitch` | `1.0` | Playback speed / pitch multiplier |
+| `spatial` | `true` | Enable 3D positional audio (false = 2D, no attenuation) |
+| `reference_distance` | `1.0` | Distance at which gain is 1.0 (no attenuation) |
+| `max_distance` | `100.0` | Distance beyond which no further attenuation occurs |
+| `rolloff_factor` | `1.0` | How quickly sound attenuates with distance |
+
+---
+
+### `ParticleSystemComponent`
+
+```julia
+ParticleSystemComponent(;
+    max_particles::Int = 256,
+    emission_rate::Float32 = 20.0f0,
+    burst_count::Int = 0,
+    lifetime_min::Float32 = 1.0f0,
+    lifetime_max::Float32 = 2.0f0,
+    velocity_min::Vec3f = Vec3f(-0.5, 1.0, -0.5),
+    velocity_max::Vec3f = Vec3f(0.5, 3.0, 0.5),
+    gravity_modifier::Float32 = 1.0f0,
+    damping::Float32 = 0.0f0,
+    start_size_min::Float32 = 0.1f0,
+    start_size_max::Float32 = 0.3f0,
+    end_size::Float32 = 0.0f0,
+    start_color::RGB{Float32} = RGB{Float32}(1, 1, 1),
+    end_color::RGB{Float32} = RGB{Float32}(1, 1, 1),
+    start_alpha::Float32 = 1.0f0,
+    end_alpha::Float32 = 0.0f0,
+    additive::Bool = false
+)
+```
+
+CPU-simulated billboard particle system. Particles are emitted from the entity's world position and rendered as camera-facing quads.
+
+**Emission:**
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `max_particles` | `256` | Maximum number of live particles |
+| `emission_rate` | `20.0` | Particles emitted per second (0 = burst only) |
+| `burst_count` | `0` | One-shot burst count (consumed on first frame, then reset to 0) |
+
+**Lifetime & Velocity:**
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `lifetime_min` | `1.0` | Minimum particle lifetime (seconds) |
+| `lifetime_max` | `2.0` | Maximum particle lifetime (seconds) |
+| `velocity_min` | `Vec3f(-0.5, 1.0, -0.5)` | Minimum initial velocity (randomized per-component) |
+| `velocity_max` | `Vec3f(0.5, 3.0, 0.5)` | Maximum initial velocity (randomized per-component) |
+
+**Physics:**
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `gravity_modifier` | `1.0` | Multiplier on gravity `(0, -9.81, 0)` |
+| `damping` | `0.0` | Velocity damping per second |
+
+**Size over lifetime:**
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `start_size_min` | `0.1` | Minimum initial size |
+| `start_size_max` | `0.3` | Maximum initial size |
+| `end_size` | `0.0` | Size at end of lifetime (lerped) |
+
+**Color over lifetime:**
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `start_color` | `RGB(1,1,1)` | Color at birth |
+| `end_color` | `RGB(1,1,1)` | Color at death (lerped) |
+| `start_alpha` | `1.0` | Alpha at birth |
+| `end_alpha` | `0.0` | Alpha at death (lerped) |
+| `additive` | `false` | Additive blending (true) vs alpha blending (false) |
+
+---
+
+### `BoneComponent`
+
+```julia
+BoneComponent(;
+    inverse_bind_matrix::Mat4f = Mat4f(I),
+    bone_index::Int = 0,
+    name::String = ""
+)
+```
+
+Represents a bone in a skeleton hierarchy. Typically created automatically by `load_model()` when loading glTF files with skins.
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `inverse_bind_matrix` | `Mat4f(I)` | Transforms from mesh space to bone-local space |
+| `bone_index` | `0` | Index into the bone array (0-based, matching glTF) |
+| `name` | `""` | Bone name from the model file |
+
+---
+
+### `SkinnedMeshComponent`
+
+```julia
+SkinnedMeshComponent(;
+    bone_entities::Vector{EntityID} = EntityID[],
+    bone_matrices::Vector{Mat4f} = Mat4f[]
+)
+```
+
+Attaches skeletal skinning to a mesh entity. Bone matrices are computed each frame by `update_skinned_meshes!()` and uploaded to the vertex shader. Maximum 128 bones per skinned mesh.
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `bone_entities` | `EntityID[]` | Ordered list of bone entity IDs (matches joint order in skin) |
+| `bone_matrices` | `Mat4f[]` | Per-frame computed bone matrices (set by skinning system) |
+
+---
+
+### `LODComponent`
+
+```julia
+LODComponent(;
+    levels::Vector{LODLevel} = LODLevel[],
+    transition_mode::LODTransitionMode = LOD_TRANSITION_DITHER,
+    transition_width::Float32 = 2.0f0,
+    hysteresis::Float32 = 1.1f0
+)
+```
+
+Level-of-detail component. Switches between mesh variants based on camera distance. Levels should be ordered from highest detail (closest) to lowest.
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `levels` | `LODLevel[]` | LOD levels, each with a mesh and max distance |
+| `transition_mode` | `LOD_TRANSITION_DITHER` | How to blend between LOD levels |
+| `transition_width` | `2.0` | Distance range for crossfade (when using dither) |
+| `hysteresis` | `1.1` | Multiplier to prevent LOD flickering (e.g., 1.1 = 10% band) |
+
+**LODLevel:**
+
+```julia
+LODLevel(; mesh::MeshComponent, max_distance::Float32)
+```
+
+**LODTransitionMode enum:**
+- `LOD_TRANSITION_INSTANT` — hard swap, no blending
+- `LOD_TRANSITION_DITHER` — Bayer dither pattern crossfade
+
+---
+
+### `TerrainComponent`
+
+```julia
+TerrainComponent(;
+    heightmap::HeightmapSource = HeightmapSource(),
+    terrain_size::Vec2f = Vec2f(256.0, 256.0),
+    max_height::Float32 = 50.0f0,
+    chunk_size::Int = 33,
+    num_lod_levels::Int = 3,
+    splatmap_path::String = "",
+    layers::Vector{TerrainLayer} = TerrainLayer[]
+)
+```
+
+Heightmap-based terrain with chunk-based LOD and optional splatmap texturing.
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `heightmap` | `HeightmapSource()` | Height data source (image, Perlin noise, or flat) |
+| `terrain_size` | `Vec2f(256, 256)` | World-space dimensions (width, depth) |
+| `max_height` | `50.0` | Maximum terrain height |
+| `chunk_size` | `33` | Vertices per chunk side (must be 2^n + 1) |
+| `num_lod_levels` | `3` | Number of terrain LOD levels |
+| `splatmap_path` | `""` | Path to RGBA splatmap texture (each channel blends a layer) |
+| `layers` | `TerrainLayer[]` | Terrain material layers (up to 4, blended by splatmap) |
+
+**HeightmapSource:**
+
+```julia
+HeightmapSource(;
+    source_type::HeightmapSourceType = HEIGHTMAP_PERLIN,
+    image_path::String = "",
+    perlin_octaves::Int = 6,
+    perlin_frequency::Float32 = 0.01f0,
+    perlin_persistence::Float32 = 0.5f0,
+    perlin_seed::Int = 42
+)
+```
+
+**HeightmapSourceType enum:**
+- `HEIGHTMAP_IMAGE` — load heights from a grayscale image
+- `HEIGHTMAP_PERLIN` — procedurally generate with Perlin noise
+- `HEIGHTMAP_FLAT` — flat terrain at height 0
+
+**TerrainLayer:**
+
+```julia
+TerrainLayer(;
+    albedo_path::String = "",
+    normal_path::String = "",
+    uv_scale::Float32 = 10.0f0
+)
+```
+
+---
+
 ## Primitives
 
 ### `cube_mesh`
@@ -582,6 +828,192 @@ Available on Linux and Windows. Requires Vulkan SDK and compatible GPU drivers.
 ### `MetalBackend`
 
 Available on macOS only. Uses the native Metal graphics API.
+
+### `WebGPUBackend`
+
+Experimental backend using wgpu via a Rust FFI library. Requires the `openreality-wgpu` compiled library. Available on Linux and Windows.
+
+---
+
+## Audio Functions
+
+### `init_audio!` / `shutdown_audio!`
+
+```julia
+init_audio!()           # Initialize OpenAL device and context
+shutdown_audio!()       # Release OpenAL resources
+```
+
+Called automatically by the render loop. Only needed if managing audio outside `render()`.
+
+### `update_audio!`
+
+```julia
+update_audio!(dt::Float64; config::AudioConfig = DEFAULT_AUDIO_CONFIG)
+```
+
+Updates listener position/orientation and all audio source states. Called automatically each frame by the render loop.
+
+### `AudioConfig`
+
+```julia
+AudioConfig(;
+    doppler_factor::Float32 = 1.0f0,
+    speed_of_sound::Float32 = 343.3f0
+)
+```
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `doppler_factor` | `1.0` | Doppler effect intensity (0 = disabled) |
+| `speed_of_sound` | `343.3` | Speed of sound for Doppler calculations (m/s) |
+
+---
+
+## Particle Functions
+
+### `update_particles!`
+
+```julia
+update_particles!(dt::Float64)
+```
+
+Simulates all particle systems: emits new particles, advances lifetimes, applies gravity and damping, updates vertex data for rendering. Called automatically each frame.
+
+### `reset_particle_pools!`
+
+```julia
+reset_particle_pools!()
+```
+
+Clears all particle pools. Call alongside `reset_component_stores!()` when starting a fresh scene.
+
+---
+
+## Skinning Functions
+
+### `update_skinned_meshes!`
+
+```julia
+update_skinned_meshes!()
+```
+
+Computes bone matrices for all entities with `SkinnedMeshComponent`. For each bone: `bone_matrix = inverse(mesh_world) * bone_world * inverse_bind_matrix`. Called automatically each frame after animation updates.
+
+### `MAX_BONES`
+
+```julia
+const MAX_BONES = 128
+```
+
+Maximum number of bones per skinned mesh. Bone matrices are uploaded as a uniform array to the vertex shader.
+
+---
+
+## Scene Export
+
+### `export_scene`
+
+```julia
+export_scene(scene::Scene, path::String;
+             physics_config::PhysicsWorldConfig = PhysicsWorldConfig(),
+             compress_textures::Bool = true)
+```
+
+Exports a scene to the binary ORSB (OpenReality Scene Binary) format. This is used for web deployment via WASM runtimes. All components, textures, and physics configuration are serialized into a single file.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `scene` | *(required)* | The scene to export |
+| `path` | *(required)* | Output file path (`.orsb`) |
+| `physics_config` | `PhysicsWorldConfig()` | Physics settings to embed |
+| `compress_textures` | `true` | Whether to compress embedded textures |
+
+---
+
+## UI Functions
+
+The UI system provides immediate-mode widgets rendered as an overlay on top of the 3D scene. Pass a callback function to the `ui` parameter of `render()`:
+
+```julia
+render(s, ui = function(ctx::UIContext)
+    ui_text(ctx, "Score: 100", x=10, y=10, size=24)
+    if ui_button(ctx, "Restart", x=10, y=50)
+        # handle click
+    end
+end)
+```
+
+### `ui_rect`
+
+```julia
+ui_rect(ctx::UIContext;
+        x::Real = 0, y::Real = 0,
+        width::Real = 100, height::Real = 100,
+        color::RGB{Float32} = RGB{Float32}(1, 1, 1),
+        alpha::Float32 = 1.0f0)
+```
+
+Draws a solid colored rectangle.
+
+### `ui_text`
+
+```julia
+ui_text(ctx::UIContext, text::String;
+        x::Real = 0, y::Real = 0,
+        size::Int = 24,
+        color::RGB{Float32} = RGB{Float32}(1, 1, 1),
+        alpha::Float32 = 1.0f0)
+```
+
+Renders text using the FreeType font atlas. Supports newlines. Coordinates are in screen pixels (top-left origin).
+
+### `ui_button`
+
+```julia
+ui_button(ctx::UIContext, label::String;
+          x::Real = 0, y::Real = 0,
+          width::Real = 120, height::Real = 40,
+          color::RGB{Float32} = RGB{Float32}(0.3, 0.3, 0.3),
+          hover_color::RGB{Float32} = RGB{Float32}(0.4, 0.4, 0.4),
+          text_color::RGB{Float32} = RGB{Float32}(1, 1, 1),
+          text_size::Int = 20,
+          alpha::Float32 = 1.0f0) -> Bool
+```
+
+Draws a clickable button. Returns `true` on the frame it is clicked. Changes color on hover.
+
+### `ui_progress_bar`
+
+```julia
+ui_progress_bar(ctx::UIContext, fraction::Real;
+                x::Real = 0, y::Real = 0,
+                width::Real = 200, height::Real = 20,
+                color::RGB{Float32} = RGB{Float32}(0.2, 0.8, 0.2),
+                bg_color::RGB{Float32} = RGB{Float32}(0.2, 0.2, 0.2),
+                alpha::Float32 = 1.0f0)
+```
+
+Draws a horizontal progress bar. `fraction` is 0.0 to 1.0.
+
+### `ui_image`
+
+```julia
+ui_image(ctx::UIContext, texture_id::UInt32;
+         x::Real = 0, y::Real = 0,
+         width::Real = 64, height::Real = 64,
+         alpha::Float32 = 1.0f0)
+```
+
+Draws a textured quad. The `texture_id` must be a pre-uploaded GPU texture handle.
+
+### `measure_text`
+
+```julia
+measure_text(atlas::FontAtlas, text::String; size::Int = 24) -> (width::Float32, height::Float32)
+```
+
+Returns the pixel dimensions that text would occupy when rendered at the given size. Useful for centering or layout.
 
 ---
 
