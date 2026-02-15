@@ -54,9 +54,13 @@ const _PARTICLE_RENDERER = ParticleRendererState(nothing, GLuint(0), GLuint(0), 
     init_particle_renderer!()
 
 Initialize particle rendering resources (shader, VAO, VBO).
+Automatically enables GPU compute path on OpenGL 4.3+.
 """
 function init_particle_renderer!()
     _PARTICLE_RENDERER.initialized && return
+
+    # Initialize GPU compute particle shaders if supported
+    init_gpu_particle_shaders!()
 
     _PARTICLE_RENDERER.shader = create_shader_program(PARTICLE_VERTEX_SHADER, PARTICLE_FRAGMENT_SHADER)
 
@@ -100,6 +104,8 @@ end
 Release particle rendering resources.
 """
 function shutdown_particle_renderer!()
+    shutdown_gpu_particle_shaders!()
+
     !_PARTICLE_RENDERER.initialized && return
 
     if _PARTICLE_RENDERER.shader !== nothing
@@ -132,14 +138,25 @@ function reset_particle_renderer!()
     _PARTICLE_RENDERER.vao = GLuint(0)
     _PARTICLE_RENDERER.vbo = GLuint(0)
     _PARTICLE_RENDERER.initialized = false
+    reset_gpu_particle_emitters!()
 end
 
 """
     render_particles!(view, proj)
 
 Render all active particle systems. Call after transparent pass.
+Uses GPU compute path on OpenGL 4.3+, CPU fallback otherwise.
 """
 function render_particles!(view::Mat4f, proj::Mat4f)
+    # GPU path: extract camera vectors from view matrix and delegate
+    if has_gpu_particles() && _GPU_PARTICLE_SHADERS.initialized
+        cam_right = Vec3f(view[1,1], view[2,1], view[3,1])
+        cam_up    = Vec3f(view[1,2], view[2,2], view[3,2])
+        render_gpu_particles!(view, proj, cam_right, cam_up)
+        return
+    end
+
+    # CPU fallback
     isempty(PARTICLE_POOLS) && return
     !_PARTICLE_RENDERER.initialized && return
 

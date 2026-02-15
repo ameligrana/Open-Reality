@@ -138,7 +138,8 @@ include("backend/opengl/opengl_deferred.jl")      # DeferredPipeline
 include("backend/opengl/opengl_ui.jl")            # UIRenderer, render_ui!
 include("backend/opengl/opengl_instancing.jl")   # Instanced rendering
 include("backend/opengl/opengl_terrain.jl")      # Terrain renderer
-include("backend/opengl/opengl_particles.jl")    # Particle renderer
+include("backend/opengl/opengl_gpu_particles.jl") # GPU compute particle system (GL 4.3+)
+include("backend/opengl/opengl_particles.jl")    # Particle renderer (CPU fallback + GPU dispatch)
 include("backend/opengl.jl")                      # OpenGLBackend, render_frame!
 
 # Shared rendering orchestration (after backend — uses ECS + frustum culling)
@@ -309,6 +310,7 @@ export ParticleSystemComponent
 export Particle, ParticlePool, PARTICLE_POOLS
 export update_particles!, reset_particle_pools!
 export init_particle_renderer!, shutdown_particle_renderer!, render_particles!, reset_particle_renderer!
+export has_gpu_particles, GPUParticleEmitter, GPU_PARTICLE_EMITTERS
 
 # Export Shadow Mapping
 export ShadowMap, create_shadow_map!, destroy_shadow_map!, compute_light_space_matrix

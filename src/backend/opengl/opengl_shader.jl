@@ -122,6 +122,42 @@ function set_uniform!(sp::ShaderProgram, name::String, val::Vec2f)
 end
 
 """
+    create_compute_shader_program(compute_src::String) -> ShaderProgram
+
+Compile a compute shader and link it into a program. Requires OpenGL 4.3+.
+"""
+function create_compute_shader_program(compute_src::String)
+    cs = compile_shader(compute_src, GL_COMPUTE_SHADER)
+
+    program = glCreateProgram()
+    glAttachShader(program, cs)
+    glLinkProgram(program)
+
+    status = Ref{GLint}(-1)
+    glGetProgramiv(program, GL_LINK_STATUS, status)
+    if status[] != GL_TRUE
+        max_len = Ref{GLint}(0)
+        glGetProgramiv(program, GL_INFO_LOG_LENGTH, max_len)
+        log_buf = Vector{UInt8}(undef, max_len[])
+        actual_len = Ref{GLsizei}(0)
+        glGetProgramInfoLog(program, max_len[], actual_len, log_buf)
+        log_str = String(log_buf[1:actual_len[]])
+        glDeleteProgram(program)
+        error("Compute shader program linking failed:\n$log_str")
+    end
+
+    glDetachShader(program, cs)
+    glDeleteShader(cs)
+
+    return ShaderProgram(program)
+end
+
+function set_uniform!(sp::ShaderProgram, name::String, val::UInt32)
+    loc = get_uniform_location!(sp, name)
+    glUniform1ui(loc, val)
+end
+
+"""
     destroy_shader_program!(sp::ShaderProgram)
 
 Delete the OpenGL shader program.

@@ -229,8 +229,16 @@ end
 
 Simulate all particle systems and generate billboard geometry.
 Call once per frame before rendering.
+Uses GPU compute path on OpenGL 4.3+, CPU fallback otherwise.
 """
 function update_particles!(dt::Float32, cam_pos::Vec3f, cam_right::Vec3f, cam_up::Vec3f)
+    # GPU path: dispatch compute shaders for simulation
+    if has_gpu_particles()
+        update_gpu_particles!(dt, cam_pos, cam_right, cam_up)
+        return
+    end
+
+    # CPU fallback
     # Track active emitters for pool cleanup
     active_emitters = Set{EntityID}()
 
