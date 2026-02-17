@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Local};
 
+use crate::project::ProjectKind;
+
 // ─── Platform ────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,10 +248,11 @@ pub enum Tab {
     Build,
     Run,
     Setup,
+    Tests,
 }
 
 impl Tab {
-    pub const ALL: &'static [Tab] = &[Tab::Dashboard, Tab::Build, Tab::Run, Tab::Setup];
+    pub const ALL: &'static [Tab] = &[Tab::Dashboard, Tab::Build, Tab::Run, Tab::Setup, Tab::Tests];
 
     pub fn label(&self) -> &'static str {
         match self {
@@ -257,6 +260,7 @@ impl Tab {
             Self::Build => "Build",
             Self::Run => "Run",
             Self::Setup => "Setup",
+            Self::Tests => "Tests",
         }
     }
 
@@ -266,6 +270,7 @@ impl Tab {
             Self::Build => 1,
             Self::Run => 2,
             Self::Setup => 3,
+            Self::Tests => 4,
         }
     }
 
@@ -274,16 +279,18 @@ impl Tab {
             Self::Dashboard => Self::Build,
             Self::Build => Self::Run,
             Self::Run => Self::Setup,
-            Self::Setup => Self::Dashboard,
+            Self::Setup => Self::Tests,
+            Self::Tests => Self::Dashboard,
         }
     }
 
     pub fn prev(&self) -> Tab {
         match self {
-            Self::Dashboard => Self::Setup,
+            Self::Dashboard => Self::Tests,
             Self::Build => Self::Dashboard,
             Self::Run => Self::Build,
             Self::Setup => Self::Run,
+            Self::Tests => Self::Setup,
         }
     }
 }
@@ -318,9 +325,12 @@ impl SetupAction {
 
 // ─── Application State ──────────────────────────────────────────────
 
+#[allow(dead_code)]
 pub struct AppState {
     pub platform: Platform,
     pub project_root: PathBuf,
+    pub project_kind: ProjectKind,
+    pub engine_path: PathBuf,
     pub active_tab: Tab,
 
     // Detection
@@ -347,13 +357,17 @@ pub struct AppState {
     pub setup_log: LogBuffer,
     pub setup_process: ProcessStatus,
 
+    // Tests tab
+    pub test_log: LogBuffer,
+    pub test_process: ProcessStatus,
+
     // Global
     pub show_help: bool,
     pub should_quit: bool,
 }
 
 impl AppState {
-    pub fn new(project_root: PathBuf) -> Self {
+    pub fn new(project_root: PathBuf, project_kind: ProjectKind, engine_path: PathBuf) -> Self {
         let platform = Platform::detect();
         let backends = Backend::available_on(platform)
             .into_iter()
@@ -371,6 +385,8 @@ impl AppState {
         Self {
             platform,
             project_root,
+            project_kind,
+            engine_path,
             active_tab: Tab::Dashboard,
             tools: ToolSet::default(),
             julia_packages_installed: None,
@@ -386,6 +402,8 @@ impl AppState {
             setup_selected: 0,
             setup_log: LogBuffer::new(5000),
             setup_process: ProcessStatus::Idle,
+            test_log: LogBuffer::new(10000),
+            test_process: ProcessStatus::Idle,
             show_help: false,
             should_quit: false,
         }

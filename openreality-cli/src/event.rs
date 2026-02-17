@@ -12,6 +12,7 @@ pub enum AppEvent {
     Build(BuildEvent),
     Run(RunEvent),
     Setup(RunEvent),
+    Test(RunEvent),
 }
 
 pub fn spawn_event_reader(tx: mpsc::UnboundedSender<AppEvent>) {

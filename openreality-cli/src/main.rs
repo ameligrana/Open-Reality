@@ -1,7 +1,10 @@
 mod app;
 mod build;
+mod cli;
+mod commands;
 mod detect;
 mod event;
+mod project;
 mod runner;
 mod state;
 mod ui;
@@ -9,6 +12,7 @@ mod ui;
 use std::io;
 
 use anyhow::Result;
+use clap::Parser;
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::backend::CrosstermBackend;
@@ -16,6 +20,7 @@ use ratatui::Terminal;
 use tokio::sync::mpsc;
 
 use event::AppEvent;
+use project::ProjectContext;
 
 struct CleanupGuard;
 
@@ -28,8 +33,40 @@ impl Drop for CleanupGuard {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let project_root = find_project_root()?;
+    let cli = cli::Cli::parse();
 
+    match cli.command {
+        None => {
+            let ctx = project::detect_project_context()?;
+            run_tui(ctx).await
+        }
+        Some(cli::Command::Init {
+            name,
+            engine_dev,
+            repo_url,
+        }) => commands::init::run(name, engine_dev, repo_url).await,
+        Some(cli::Command::New { kind }) => {
+            let ctx = project::detect_project_context()?;
+            match kind {
+                cli::NewKind::Scene { name } => commands::new::scene(name, ctx).await,
+            }
+        }
+        Some(cli::Command::Run { file }) => {
+            let ctx = project::detect_project_context()?;
+            commands::run_cmd::run(file, ctx).await
+        }
+        Some(cli::Command::Build { backend }) => {
+            let ctx = project::detect_project_context()?;
+            commands::build_cmd::run(backend, ctx).await
+        }
+        Some(cli::Command::Test) => {
+            let ctx = project::detect_project_context()?;
+            commands::test_cmd::run(ctx).await
+        }
+    }
+}
+
+async fn run_tui(ctx: ProjectContext) -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -47,7 +84,7 @@ async fn main() -> Result<()> {
     event::spawn_event_reader(event_tx.clone());
 
     // Initialize app (runs detection)
-    let mut app = app::App::new(project_root, event_tx).await?;
+    let mut app = app::App::new(ctx, event_tx).await?;
 
     // Initial draw
     app.draw(&mut terminal)?;
@@ -78,20 +115,4 @@ async fn main() -> Result<()> {
     }
 
     Ok(())
-}
-
-fn find_project_root() -> Result<std::path::PathBuf> {
-    let mut dir = std::env::current_dir()?;
-    loop {
-        if dir.join("Project.toml").exists() && dir.join("src").join("OpenReality.jl").exists() {
-            return Ok(dir);
-        }
-        if !dir.pop() {
-            anyhow::bail!(
-                "Could not find Open Reality project root.\n\
-                 Run `orcli` from within the Open Reality repository \
-                 (directory containing Project.toml and src/OpenReality.jl)."
-            );
-        }
-    }
 }

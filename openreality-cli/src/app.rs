@@ -1,5 +1,4 @@
 use std::io;
-use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use crossterm::execute;
@@ -13,6 +12,7 @@ use tokio::sync::mpsc;
 use crate::build;
 use crate::detect;
 use crate::event::AppEvent;
+use crate::project::ProjectContext;
 use crate::runner;
 use crate::state::*;
 use crate::ui;
@@ -23,19 +23,22 @@ pub struct App {
     build_handle: Option<tokio::task::JoinHandle<()>>,
     run_handle: Option<tokio::task::JoinHandle<()>>,
     setup_handle: Option<tokio::task::JoinHandle<()>>,
+    test_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl App {
     pub async fn new(
-        project_root: PathBuf,
+        ctx: ProjectContext,
         event_tx: mpsc::UnboundedSender<AppEvent>,
     ) -> anyhow::Result<Self> {
-        let mut state = AppState::new(project_root.clone());
+        let project_root = ctx.project_root.clone();
+        let engine_path = ctx.engine_path.clone();
+        let mut state = AppState::new(ctx.project_root, ctx.kind, ctx.engine_path);
 
         // Run detection
         state.tools = detect::detect_all_tools(state.platform).await;
         state.julia_packages_installed = detect::check_julia_packages(&project_root);
-        state.backends = detect::detect_all_backends(&project_root, &state.tools, state.platform);
+        state.backends = detect::detect_all_backends(&engine_path, &state.tools, state.platform);
         state.examples = detect::discover_examples(&project_root);
 
         Ok(Self {
@@ -44,6 +47,7 @@ impl App {
             build_handle: None,
             run_handle: None,
             setup_handle: None,
+            test_handle: None,
         })
     }
 
@@ -54,6 +58,7 @@ impl App {
             AppEvent::Build(be) => self.handle_build_event(be),
             AppEvent::Run(re) => self.handle_run_event(re),
             AppEvent::Setup(se) => self.handle_setup_event(se),
+            AppEvent::Test(te) => self.handle_test_event(te),
         }
     }
 
@@ -94,6 +99,10 @@ impl App {
                 self.state.active_tab = Tab::Setup;
                 return;
             }
+            (_, KeyCode::Char('5')) => {
+                self.state.active_tab = Tab::Tests;
+                return;
+            }
             (_, KeyCode::Tab) => {
                 self.state.active_tab = self.state.active_tab.next();
                 return;
@@ -114,6 +123,7 @@ impl App {
             Tab::Build => self.handle_build_key(key).await,
             Tab::Run => self.handle_run_key(key).await,
             Tab::Setup => self.handle_setup_key(key).await,
+            Tab::Tests => self.handle_test_key(key).await,
         }
     }
 
@@ -232,9 +242,9 @@ impl App {
             }
         });
 
-        let project_root = self.state.project_root.clone();
+        let engine_path = self.state.engine_path.clone();
         let platform = self.state.platform;
-        match build::spawn_build(&project_root, backend, platform, build_tx).await {
+        match build::spawn_build(&engine_path, backend, platform, build_tx).await {
             Ok(handle) => self.build_handle = Some(handle),
             Err(e) => {
                 self.state
@@ -266,7 +276,7 @@ impl App {
                     let idx = self.state.build_selected;
                     let backend = self.state.backends[idx].backend;
                     self.state.backends[idx].build_status = detect::check_backend_artifact(
-                        &self.state.project_root,
+                        &self.state.engine_path,
                         backend,
                         self.state.platform,
                     );
@@ -458,6 +468,85 @@ impl App {
             runner::RunEvent::Error(e) => {
                 self.state.setup_log.push(format!("Error: {e}"), true);
                 self.state.setup_process = ProcessStatus::Failed { error: e };
+            }
+        }
+    }
+
+    async fn handle_test_key(&mut self, key: crossterm::event::KeyEvent) {
+        match key.code {
+            KeyCode::Enter | KeyCode::Char('t') => {
+                self.start_tests().await;
+            }
+            KeyCode::Char('g') => self.state.test_log.scroll_to_top(),
+            KeyCode::Char('G') => self.state.test_log.scroll_to_bottom(),
+            KeyCode::PageUp => self.state.test_log.scroll_up(20),
+            KeyCode::PageDown => self.state.test_log.scroll_down(20),
+            _ => {}
+        }
+    }
+
+    async fn start_tests(&mut self) {
+        if matches!(self.state.test_process, ProcessStatus::Running) {
+            self.state
+                .test_log
+                .push("Tests are already running.".into(), true);
+            return;
+        }
+
+        self.state.test_log.clear();
+        self.state
+            .test_log
+            .push("Running test suite...".into(), false);
+        self.state.test_process = ProcessStatus::Running;
+
+        let (test_tx, mut test_rx) = mpsc::unbounded_channel();
+        let main_tx = self.event_tx.clone();
+        tokio::spawn(async move {
+            while let Some(ev) = test_rx.recv().await {
+                if main_tx.send(AppEvent::Test(ev)).is_err() {
+                    break;
+                }
+            }
+        });
+
+        let engine_path = self.state.engine_path.clone();
+        match runner::spawn_pkg_command(&engine_path, "Pkg.test()", test_tx).await {
+            Ok(handle) => self.test_handle = Some(handle),
+            Err(e) => {
+                self.state
+                    .test_log
+                    .push(format!("Failed to start tests: {e}"), true);
+                self.state.test_process = ProcessStatus::Failed {
+                    error: e.to_string(),
+                };
+            }
+        }
+    }
+
+    fn handle_test_event(&mut self, event: runner::RunEvent) {
+        match event {
+            runner::RunEvent::StdoutLine(line) => {
+                self.state.test_log.push(line, false);
+            }
+            runner::RunEvent::StderrLine(line) => {
+                self.state.test_log.push(line, true);
+            }
+            runner::RunEvent::Finished { exit_code } => {
+                self.state.test_process = ProcessStatus::Finished { exit_code };
+                if exit_code == Some(0) {
+                    self.state
+                        .test_log
+                        .push("All tests passed!".into(), false);
+                } else {
+                    self.state.test_log.push(
+                        format!("Tests failed (exit code: {exit_code:?})"),
+                        true,
+                    );
+                }
+            }
+            runner::RunEvent::Error(e) => {
+                self.state.test_log.push(format!("Error: {e}"), true);
+                self.state.test_process = ProcessStatus::Failed { error: e };
             }
         }
     }

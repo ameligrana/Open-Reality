@@ -214,50 +214,53 @@ pub fn check_deps_for_backend(backend: Backend, tools: &ToolSet, platform: Platf
 }
 
 pub fn discover_examples(project_root: &Path) -> Vec<ExampleEntry> {
-    let examples_dir = project_root.join("examples");
     let mut entries = Vec::new();
 
-    let Ok(dir) = std::fs::read_dir(&examples_dir) else {
-        return entries;
-    };
-
-    let mut files: Vec<_> = dir
-        .flatten()
-        .filter(|e| {
-            e.path().extension().map_or(false, |ext| ext == "jl")
-                && !e.file_name().to_string_lossy().starts_with('_')
-        })
-        .collect();
-
-    files.sort_by_key(|e| e.file_name());
-
-    for entry in files {
-        let path = entry.path();
-        let filename = entry.file_name().to_string_lossy().to_string();
-
-        let content = std::fs::read_to_string(&path).unwrap_or_default();
-        let description = content
-            .lines()
-            .find(|l| l.starts_with('#'))
-            .map(|l| l.trim_start_matches('#').trim().to_string())
-            .unwrap_or_default();
-
-        let required_backend = if content.contains("MetalBackend()") {
-            Some(Backend::Metal)
-        } else if content.contains("VulkanBackend()") {
-            Some(Backend::Vulkan)
-        } else if content.contains("WebGPUBackend()") {
-            Some(Backend::WebGPU)
-        } else {
-            None
+    // Scan both examples/ and scenes/ directories
+    for dir_name in &["examples", "scenes"] {
+        let dir_path = project_root.join(dir_name);
+        let Ok(dir) = std::fs::read_dir(&dir_path) else {
+            continue;
         };
 
-        entries.push(ExampleEntry {
-            filename,
-            path,
-            description,
-            required_backend,
-        });
+        let mut files: Vec<_> = dir
+            .flatten()
+            .filter(|e| {
+                e.path().extension().map_or(false, |ext| ext == "jl")
+                    && !e.file_name().to_string_lossy().starts_with('_')
+            })
+            .collect();
+
+        files.sort_by_key(|e| e.file_name());
+
+        for entry in files {
+            let path = entry.path();
+            let filename = entry.file_name().to_string_lossy().to_string();
+
+            let content = std::fs::read_to_string(&path).unwrap_or_default();
+            let description = content
+                .lines()
+                .find(|l| l.starts_with('#'))
+                .map(|l| l.trim_start_matches('#').trim().to_string())
+                .unwrap_or_default();
+
+            let required_backend = if content.contains("MetalBackend()") {
+                Some(Backend::Metal)
+            } else if content.contains("VulkanBackend()") {
+                Some(Backend::Vulkan)
+            } else if content.contains("WebGPUBackend()") {
+                Some(Backend::WebGPU)
+            } else {
+                None
+            };
+
+            entries.push(ExampleEntry {
+                filename,
+                path,
+                description,
+                required_backend,
+            });
+        }
     }
 
     entries

@@ -16,3 +16,7 @@ anyhow = "1"
 which = "7"
 chrono = "0.4"
 dirs = "6"
+clap = { version = "4", features = ["derive"] }
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+uuid = { version = "1", features = ["v4"] }

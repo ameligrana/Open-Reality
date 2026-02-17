@@ -5,6 +5,7 @@ pub mod log_panel;
 pub mod run_view;
 pub mod setup_view;
 pub mod status;
+pub mod test_view;
 
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph, Tabs};
@@ -41,11 +42,12 @@ pub fn render(frame: &mut Frame, state: &AppState) {
         Tab::Build => build_view::render(frame, state, chunks[1]),
         Tab::Run => run_view::render(frame, state, chunks[1]),
         Tab::Setup => setup_view::render(frame, state, chunks[1]),
+        Tab::Tests => test_view::render(frame, state, chunks[1]),
     }
 
     // Status bar
     let status_text = format!(
-        " {} | {} | q: quit | ?: help | 1-4: tabs | Tab: next",
+        " {} | {} | q: quit | ?: help | 1-5: tabs | Tab: next",
         state.platform.label(),
         state.project_root.display()
     );
