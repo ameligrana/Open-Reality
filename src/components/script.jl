@@ -11,15 +11,22 @@ Attaches lifecycle callbacks to an entity. The callbacks are:
   and `nothing` when called from `destroy_entity!` without an explicit `ctx` kwarg
   (e.g. during scene switches)
 """
+# Maximum number of errors a single ScriptComponent may accumulate before its
+# callbacks are automatically disabled. Set to 0 to disable the budget (infinite
+# errors allowed). Default: 5.
+const SCRIPT_ERROR_BUDGET = Ref{Int}(5)
+
 mutable struct ScriptComponent <: Component
     on_start::Union{Function, Nothing}
     on_update::Union{Function, Nothing}
     on_destroy::Union{Function, Nothing}
     _started::Bool
+    _error_count::Int
+    _disabled::Bool
 
     ScriptComponent(;
         on_start::Union{Function, Nothing} = nothing,
         on_update::Union{Function, Nothing} = nothing,
         on_destroy::Union{Function, Nothing} = nothing
-    ) = new(on_start, on_update, on_destroy, false)
+    ) = new(on_start, on_update, on_destroy, false, 0, false)
 end

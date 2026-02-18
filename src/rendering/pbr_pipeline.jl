@@ -5,6 +5,64 @@
 const _UI_CALLBACK = Ref{Union{Function, Nothing}}(nothing)
 const _UI_CONTEXT = Ref{Union{UIContext, Nothing}}(nothing)
 
+# =============================================================================
+# GPU Resource Lifecycle Management
+# =============================================================================
+
+"""
+    flush_gpu_cleanup!(backend::AbstractBackend)
+
+Drain the GPU cleanup queue and destroy GPU resources (meshes, bounding spheres)
+for entities that were removed since the last flush.
+Called once per frame before `render_frame!`.
+"""
+function flush_gpu_cleanup!(backend::AbstractBackend)
+    entities = drain_gpu_cleanup_queue!()
+    isempty(entities) && return nothing
+
+    if hasproperty(backend, :gpu_cache)
+        cache = backend.gpu_cache
+        for eid in entities
+            if haskey(cache.meshes, eid)
+                destroy_gpu_mesh!(cache.meshes[eid])
+                delete!(cache.meshes, eid)
+            end
+        end
+    end
+
+    if hasproperty(backend, :bounds_cache)
+        for eid in entities
+            delete!(backend.bounds_cache, eid)
+        end
+    end
+
+    return nothing
+end
+
+"""
+    cleanup_all_gpu_resources!(backend::AbstractBackend)
+
+Destroy ALL GPU resources in the backend's caches. Used during scene switches
+to prevent leaked resources from the previous scene.
+"""
+function cleanup_all_gpu_resources!(backend::AbstractBackend)
+    drain_gpu_cleanup_queue!()
+
+    if hasproperty(backend, :gpu_cache)
+        destroy_all!(backend.gpu_cache)
+    end
+
+    if hasproperty(backend, :texture_cache)
+        destroy_all_textures!(backend.texture_cache)
+    end
+
+    if hasproperty(backend, :bounds_cache)
+        empty!(backend.bounds_cache)
+    end
+
+    return nothing
+end
+
 function _execute_scene_switch!(backend::AbstractBackend, new_defs::Vector, on_scene_switch::Union{Function, Nothing})
     # Snapshot on_destroy callbacks BEFORE reset
     script_entities = entities_with_component(ScriptComponent)
@@ -25,6 +83,8 @@ function _execute_scene_switch!(backend::AbstractBackend, new_defs::Vector, on_s
         reset_engine_state!()
         clear_audio_sources!()
     end
+    # Destroy all GPU resources from the previous scene to prevent leaks
+    cleanup_all_gpu_resources!(backend)
     # Build the new scene AFTER reset
     return scene(new_defs)
 end
@@ -213,6 +273,9 @@ function run_render_loop!(initial_scene::Scene;
 
             current_scene = apply_mutations!(ctx, current_scene)
 
+            # Free GPU resources for entities removed this frame
+            flush_gpu_cleanup!(backend)
+
             # render_frame! handles 3D rendering + UI + swap_buffers
             render_frame!(backend, current_scene)
             flush_debug_draw!()
@@ -232,6 +295,7 @@ function run_render_loop!(initial_scene::Scene;
         reset_particle_pools!()
         reset_terrain_cache!()
         shutdown_audio!()
+        cleanup_all_gpu_resources!(backend)
         shutdown!(backend)
     end
 
@@ -442,6 +506,9 @@ function run_render_loop!(fsm::GameStateMachine;
                 _UI_CALLBACK[] = ui
             end
 
+            # Free GPU resources for entities removed this frame
+            flush_gpu_cleanup!(backend)
+
             # render_frame! handles 3D rendering + UI + swap_buffers
             render_frame!(backend, current_scene)
             flush_debug_draw!()
@@ -461,6 +528,7 @@ function run_render_loop!(fsm::GameStateMachine;
         reset_particle_pools!()
         reset_terrain_cache!()
         shutdown_audio!()
+        cleanup_all_gpu_resources!(backend)
         shutdown!(backend)
     end
 

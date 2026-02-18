@@ -118,8 +118,38 @@ Reset all component stores. Useful for testing.
 """
 const _RESET_HOOKS = Function[]
 
+# GPU cleanup queue — entities pending GPU resource removal.
+# Filled by `remove_entity()`, drained by `flush_gpu_cleanup!()` in the render loop.
+const _GPU_CLEANUP_QUEUE = EntityID[]
+
+"""
+    queue_gpu_cleanup!(entity_ids)
+
+Enqueue entity IDs for deferred GPU resource cleanup (meshes, bounds, etc.).
+Called automatically by `remove_entity()`; flushed once per frame by the render loop.
+"""
+function queue_gpu_cleanup!(entity_ids)
+    append!(_GPU_CLEANUP_QUEUE, entity_ids)
+    return nothing
+end
+
+"""
+    drain_gpu_cleanup_queue!() -> Vector{EntityID}
+
+Return all pending entity IDs and clear the queue.
+"""
+function drain_gpu_cleanup_queue!()::Vector{EntityID}
+    if isempty(_GPU_CLEANUP_QUEUE)
+        return EntityID[]
+    end
+    result = copy(_GPU_CLEANUP_QUEUE)
+    empty!(_GPU_CLEANUP_QUEUE)
+    return result
+end
+
 function reset_component_stores!()
     empty!(COMPONENT_STORES)
+    empty!(_GPU_CLEANUP_QUEUE)
     for hook in _RESET_HOOKS
         hook()
     end

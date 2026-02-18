@@ -24,18 +24,42 @@ mutable struct TextureCache <: AbstractTextureCache
     TextureCache() = new(Dict{String, GPUTexture}())
 end
 
+# Create a 2x2 magenta/black checkerboard texture that signals a missing or broken
+# texture in the scene. Cached under the key "__fallback__".
+function _create_fallback_texture(cache::TextureCache)
+    if haskey(cache.textures, "__fallback__")
+        return cache.textures["__fallback__"]
+    end
+    # 2×2 checkerboard: magenta + black
+    pixels = UInt8[
+        255, 0, 255,    0, 0, 0,
+          0, 0,   0,  255, 0, 255,
+    ]
+    gpu = upload_texture_to_gpu(pixels, 2, 2, 3)
+    cache.textures["__fallback__"] = gpu
+    return gpu
+end
+
 """
     load_texture(cache::TextureCache, path::String) -> GPUTexture
 
 Load an image from disk, upload to GPU as a 2D texture.
 Returns cached texture if the same path was loaded before.
+If loading fails, returns a magenta fallback texture.
 """
 function load_texture(cache::TextureCache, path::String)
     if haskey(cache.textures, path)
         return cache.textures[path]
     end
 
-    img = FileIO.load(path)
+    local img
+    try
+        img = FileIO.load(path)
+    catch e
+        @warn "Failed to load texture, using fallback" path exception=e
+        return _create_fallback_texture(cache)
+    end
+
     h, w = size(img)
 
     # Determine channel count

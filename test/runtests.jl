@@ -1612,9 +1612,13 @@ using StaticArrays
 
     @testset "Model Loading" begin
         @testset "load_model dispatches by extension" begin
-            # Test that unsupported extensions throw
-            @test_throws ErrorException load_model("test.xyz")
-            @test_throws ErrorException load_model("test.fbx")
+            # Unsupported extensions return fallback placeholder instead of throwing
+            result_xyz = load_model("test.xyz")
+            @test result_xyz isa Vector
+            @test length(result_xyz) == 1
+            result_fbx = load_model("test.fbx")
+            @test result_fbx isa Vector
+            @test length(result_fbx) == 1
         end
     end
 

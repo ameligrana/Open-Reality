@@ -96,11 +96,11 @@ include("systems/audio.jl")
 include("systems/particles.jl")
 include("systems/scripts.jl")
 
-# Game State Machine
-include("game/state_machine.jl")
-include("game/game_manager.jl")
+# Game State Machine (prefab → context → state_machine: resolve forward references)
 include("game/prefab.jl")
 include("game/context.jl")
+include("game/state_machine.jl")
+include("game/game_manager.jl")
 include("game/event_bus.jl")
 
 # Debug utilities (ENV-gated, zero overhead when OPENREALITY_DEBUG = false)
@@ -239,12 +239,16 @@ include("loading/asset_manager.jl")
 # Scene export (ORSB format for WASM web deployment)
 include("export/scene_export.jl")
 
+# Save/load serialization system
+include("serialization/save_load.jl")
+
 # Export ECS
 export EntityID, World, create_entity!, create_entity_id
 export Component, ComponentStore
 export add_component!, get_component, has_component, remove_component!
 export collect_components, entities_with_component, first_entity_with_component, component_count, iterate_components
 export register_component_type, reset_entity_counter!, reset_component_stores!, reset_engine_state!
+export queue_gpu_cleanup!, drain_gpu_cleanup_queue!, flush_gpu_cleanup!, cleanup_all_gpu_resources!
 
 # Export State
 export State, state
@@ -301,7 +305,7 @@ export JointConstraint, JointComponent
 export BallSocketJoint, DistanceJoint, HingeJoint, FixedJoint, SliderJoint
 
 # Export Scripts
-export ScriptComponent, update_scripts!
+export ScriptComponent, update_scripts!, SCRIPT_ERROR_BUDGET
 
 # Export Triggers
 export TriggerComponent
@@ -479,6 +483,9 @@ export AssetManager, get_asset_manager, reset_asset_manager!, get_model, preload
 
 # Export Scene Export (ORSB)
 export export_scene
+
+# Export Save/Load
+export save_game, load_game, register_non_serializable!
 
 """
     render(scene::Scene; backend=OpenGLBackend(), width=1280, height=720, title="OpenReality", post_process=nothing, ui=nothing, on_update=nothing, on_scene_switch=nothing)

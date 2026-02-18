@@ -10,11 +10,39 @@
 
 Immutable scene structure containing entities and their hierarchies.
 Following the functional paradigm, all operations return new scenes.
+
+Maintains indexed lookup structures for O(1) queries:
+- `entity_set` — O(1) `has_entity` checks (vs O(N) linear scan on a Vector)
+- `parent_map` — O(1) `get_parent` lookups (vs O(N·M) hierarchy scan)
+- `root_set`  — O(1) `is_root` checks
 """
 struct Scene
     entities::Vector{EntityID}
     hierarchy::Dict{EntityID, Vector{EntityID}}  # parent → children
     root_entities::Vector{EntityID}  # Entities with no parent
+    entity_set::Set{EntityID}                    # O(1) entity membership
+    parent_map::Dict{EntityID, EntityID}         # child → parent, O(1) parent lookup
+    root_set::Set{EntityID}                      # O(1) root membership
+end
+
+"""
+    Scene(entities, hierarchy, root_entities)
+
+Backward-compatible 3-arg constructor. Automatically derives the indexed
+lookup fields (`entity_set`, `parent_map`, `root_set`) from the primary data.
+"""
+function Scene(entities::Vector{EntityID},
+               hierarchy::Dict{EntityID, Vector{EntityID}},
+               root_entities::Vector{EntityID})
+    entity_set = Set{EntityID}(entities)
+    parent_map = Dict{EntityID, EntityID}()
+    for (parent, children) in hierarchy
+        for child in children
+            parent_map[child] = parent
+        end
+    end
+    root_set = Set{EntityID}(root_entities)
+    Scene(entities, hierarchy, root_entities, entity_set, parent_map, root_set)
 end
 
 """
@@ -72,6 +100,9 @@ function remove_entity(scene::Scene, entity_id::EntityID)::Scene
     # Collect all entities to remove (entity and its descendants)
     entities_to_remove = Set{EntityID}()
     collect_descendants!(entities_to_remove, scene, entity_id)
+
+    # Queue GPU resource cleanup for removed entities
+    queue_gpu_cleanup!(entities_to_remove)
 
     # Purge ECS components for all entities being removed
     for eid in entities_to_remove
@@ -403,13 +434,7 @@ Get the parent of an entity in the scene.
 Returns nothing if the entity is a root entity.
 """
 function get_parent(scene::Scene, entity_id::EntityID)::Union{EntityID, Nothing}
-    # Search for the entity in the hierarchy
-    for (parent, children) in scene.hierarchy
-        if entity_id in children
-            return parent
-        end
-    end
-    return nothing
+    return get(scene.parent_map, entity_id, nothing)
 end
 
 """
@@ -418,7 +443,7 @@ end
 Check if an entity exists in the scene.
 """
 function has_entity(scene::Scene, entity_id::EntityID)::Bool
-    return entity_id in scene.entities
+    return entity_id in scene.entity_set
 end
 
 """
@@ -427,7 +452,7 @@ end
 Check if an entity is a root entity (has no parent).
 """
 function is_root(scene::Scene, entity_id::EntityID)::Bool
-    return entity_id in scene.root_entities
+    return entity_id in scene.root_set
 end
 
 """
