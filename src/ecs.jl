@@ -80,6 +80,8 @@ World() = _WORLD
 
 """
     create_entity!(world::World) -> EntityID
+
+Create a new entity in the world.
 """
 function create_entity!(world)
     ark_entity = Ark.new_entity!(world, ())
@@ -94,6 +96,8 @@ end
     Component
 
 Abstract base type for all components in the ECS.
+
+All component types must subtype this.
 """
 abstract type Component end
 
@@ -104,7 +108,6 @@ abstract type Component end
 struct ComponentStore{T <: Component}
 end
 
-const COMPONENT_STORES = Dict{DataType, ComponentStore{<:Component}}()
 
 """
     reset_component_stores!()
@@ -120,13 +123,26 @@ end
 
 const _RESET_HOOKS = Function[]
 
+# GPU cleanup queue — entities pending GPU resource removal.
+# Filled by `remove_entity()`, drained by `flush_gpu_cleanup!()` in the render loop.
 const _GPU_CLEANUP_QUEUE = EntityID[]
 
+"""
+    queue_gpu_cleanup!(entity_ids)
+
+Enqueue entity IDs for deferred GPU resource cleanup (meshes, bounds, etc.).
+Called automatically by `remove_entity()`; flushed once per frame by the render loop.
+"""
 function queue_gpu_cleanup!(entity_ids)
     append!(_GPU_CLEANUP_QUEUE, entity_ids)
     return nothing
 end
 
+"""
+    drain_gpu_cleanup_queue!() -> Vector{EntityID}
+
+Return all pending entity IDs and clear the queue.
+"""
 function drain_gpu_cleanup_queue!()::Vector{EntityID}
     if isempty(_GPU_CLEANUP_QUEUE)
         return EntityID[]
@@ -136,16 +152,15 @@ function drain_gpu_cleanup_queue!()::Vector{EntityID}
     return result
 end
 
-function get_component_store(::Type{T}) where T <: Component
-    return ComponentStore{T}()
-end
-
 # =============================================================================
 # Component Operations
 # =============================================================================
 
 """
     add_component!(entity_id::EntityID, component::T) where T <: Component
+
+Add a component to an entity. If the entity already has a component of this type,
+it will be replaced.
 """
 function add_component!(ark_entity::EntityID, component::T) where T <: Component
     world = World()
@@ -161,7 +176,10 @@ function add_component!(ark_entity::EntityID, component::T) where T <: Component
 end
 
 """
-    get_component(entity_id::EntityID, ::Type{T}) where T <: Component
+    get_component(entity_id::EntityID, ::Type{T}) where T <: Component -> Union{T, Nothing}
+
+Get a component of the specified type for an entity.
+Returns nothing if the entity doesn't have this component type.
 """
 function get_component(ark_entity::EntityID, ::Type{T})::Union{T, Nothing} where T <: Component
     world = World()
@@ -172,12 +190,26 @@ function get_component(ark_entity::EntityID, ::Type{T})::Union{T, Nothing} where
     return Ark.get_components(world, ark_entity, (T,))[1]
 end
 
+
+"""
+    has_component(entity_id::EntityID, ::Type{T}) where T <: Component -> Bool
+
+Check if an entity has a component of the specified type.
+"""
 function has_component(ark_entity::EntityID, ::Type{T})::Bool where T <: Component
     world = World()
     ark_entity === nothing && return false
     return Ark.has_components(world, ark_entity, (T,))
 end
 
+"""
+    remove_component!(entity_id::EntityID, ::Type{T}) where T <: Component -> Bool
+
+Remove a component of the specified type from an entity.
+Returns true if the component was removed, false if the entity didn't have it.
+
+Uses swap-and-pop for O(1) removal while maintaining contiguous storage.
+"""
 function remove_component!(ark_entity::EntityID, ::Type{T})::Bool where T <: Component
     world = World()
     ark_entity === nothing && return false
@@ -194,6 +226,9 @@ end
 
 """
     collect_components(::Type{T}) where T <: Component
+
+Get all components of the specified type.
+Returns an empty vector if no components of this type exist.
 """
 function collect_components(::Type{T})::Vector{T} where T <: Component
     world = World()
@@ -205,7 +240,11 @@ function collect_components(::Type{T})::Vector{T} where T <: Component
 end
 
 """
-    entities_with_component(::Type{T}) where T <: Component
+    entities_with_component(::Type{T}) where T <: Component -> Vector{EntityID}
+
+Get all entity IDs that have a component of the specified type.
+Returns an empty vector if no entities have this component type.
+Note: This allocates a new vector. For hot-path iteration, use `iterate_components` instead.
 """
 function entities_with_component(::Type{T})::Vector{EntityID} where T <: Component
     world = World()
@@ -218,7 +257,10 @@ function entities_with_component(::Type{T})::Vector{EntityID} where T <: Compone
 end
 
 """
-    first_entity_with_component(::Type{T}) where T <: Component
+    first_entity_with_component(::Type{T}) where T <: Component -> Union{EntityID, Nothing}
+
+Get the first entity ID with a component of the specified type, or nothing.
+Non-allocating alternative to `entities_with_component(...)[1]`.
 """
 function first_entity_with_component(::Type{T})::Union{EntityID, Nothing} where T <: Component
     world = World()
@@ -231,7 +273,9 @@ function first_entity_with_component(::Type{T})::Union{EntityID, Nothing} where 
 end
 
 """
-    component_count(::Type{T}) where T <: Component
+    component_count(::Type{T}) where T <: Component -> Int
+
+Get the number of entities with a component of the specified type.
 """
 function component_count(::Type{T})::Int where T <: Component
     world = World()
@@ -243,6 +287,9 @@ end
 
 """
     iterate_components(f::Function, ::Type{T}) where T <: Component
+
+Iterate over all (entity_id, component) pairs for a component type.
+Calls f(entity_id, component) for each pair.
 """
 function iterate_components(f::Function, ::Type{T}) where T <: Component
     world = World()
@@ -258,6 +305,11 @@ end
 
 """
     reset_engine_state!()
+
+Reset all engine globals for scene switching. Clears ECS stores, entity counter,
+physics world, trigger state, particle pools, terrain cache, LOD cache,
+world transform cache, and asset manager cache. Audio device/context are
+intentionally excluded — use `clear_audio_sources!()` separately if needed.
 """
 function reset_engine_state!()
     reset_component_stores!()
