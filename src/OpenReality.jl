@@ -248,6 +248,55 @@ include("export/scene_export.jl")
 # Save/load serialization system
 include("serialization/save_load.jl")
 
+const COMPONENT_TYPES = DataType[
+    # Animation
+    AnimationComponent,
+    # Animation Blend Tree
+    AnimationBlendTreeComponent,
+    # Audio
+    AudioListenerComponent,
+    AudioSourceComponent,
+    # Camera
+    CameraComponent,
+    # Camera Controller
+    ThirdPersonCamera,
+    OrbitCamera,
+    CinematicCamera,
+    # Collider
+    ColliderComponent,
+    # Lights
+    PointLightComponent,
+    DirectionalLightComponent,
+    IBLComponent,
+    # Lod
+    LODComponent,
+    # Material
+    MaterialComponent,
+    # Mesh
+    MeshComponent,
+    # Particle System
+    ParticleSystemComponent,
+    # Player
+    PlayerComponent,
+    # Rigid Body
+    RigidBodyComponent,
+    # Script
+    ScriptComponent,
+    # Skeleton
+    BoneComponent,
+    SkinnedMeshComponent,
+    # Terrain
+    TerrainComponent,
+    # Transform
+    TransformComponent,
+    # Constraint
+    JointComponent,
+    # Trigger
+    TriggerComponent,
+    # Collision
+    CollisionCallbackComponent,
+]
+
 # Initialize the global Ark world with all components
 const _WORLD = initialize_world()
 

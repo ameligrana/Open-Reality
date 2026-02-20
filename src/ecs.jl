@@ -17,58 +17,8 @@ Base.isless(a::EntityID, b::EntityID) = a._id < b._id
 ####
 
 function initialize_world(custom_components=[])
-    component_types = [
-        # Custom
-        custom_components...,
-        # Animation
-        AnimationComponent,
-        # Animation Blend Tree
-        AnimationBlendTreeComponent,
-        # Audio
-        AudioListenerComponent,
-        AudioSourceComponent,
-        # Camera
-        CameraComponent,
-        # Camera Controller
-        ThirdPersonCamera,
-        OrbitCamera,
-        CinematicCamera,
-        # Collider
-        ColliderComponent,
-        # Lights
-        PointLightComponent,
-        DirectionalLightComponent,
-        IBLComponent,
-        # Lod
-        LODComponent,
-        # Material
-        MaterialComponent,
-        # Mesh
-        MeshComponent,
-        # Particle System
-        ParticleSystemComponent,
-        # Player
-        PlayerComponent,
-        # Rigid Body
-        RigidBodyComponent,
-        # Script
-        ScriptComponent,
-        # Skeleton
-        BoneComponent,
-        SkinnedMeshComponent,
-        # Terrain
-        TerrainComponent,
-        # Transform
-        TransformComponent,
-        # Constraint
-        JointComponent,
-        # Trigger
-        TriggerComponent,
-        # Collision
-        CollisionCallbackComponent,
-    ]
-
-    return Ark.World(component_types..., allow_mutable=true)
+    types = [custom_components...; COMPONENT_TYPES]
+    return Ark.World(types..., allow_mutable=true)
 end
 
 """

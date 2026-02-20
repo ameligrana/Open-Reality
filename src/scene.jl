@@ -105,11 +105,9 @@ function remove_entity(scene::Scene, entity_id::EntityID)::Scene
     queue_gpu_cleanup!(entities_to_remove)
 
     # Purge ECS components for all entities being removed
+    world = World()
     for eid in entities_to_remove
-        for (_, store) in COMPONENT_STORES
-            T = eltype(store.components)
-            remove_component!(eid, T)
-        end
+        Ark.remove_entity!(world, eid)
     end
 
     # Filter out removed entities
