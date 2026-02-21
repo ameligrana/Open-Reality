@@ -88,8 +88,9 @@ function vk_upload_texture(device::Device, physical_device::PhysicalDevice,
         mip_levels=mip_levels
     )
 
-    # Create staging buffer
-    buffer_size = width * height * 4
+    # Create staging buffer (bytes per pixel depends on format)
+    bytes_per_pixel = format in (FORMAT_R16G16B16A16_SFLOAT, FORMAT_R16G16B16A16_UNORM) ? 8 : 4
+    buffer_size = width * height * bytes_per_pixel
     staging_buf, staging_mem = vk_create_buffer(
         device, physical_device, buffer_size,
         BUFFER_USAGE_TRANSFER_SRC_BIT,

@@ -3,7 +3,7 @@
 """
     vk_upload_mesh!(cache, device, physical_device, command_pool, queue, entity_id, mesh) -> VulkanGPUMesh
 
-Upload mesh data to GPU via staging buffers.
+Upload mesh data to GPU using host-visible buffers.
 Vertex layout: binding 0 = positions, binding 1 = normals, binding 2 = UVs.
 """
 function vk_upload_mesh!(cache::VulkanGPUResourceCache, device::Device,
@@ -14,41 +14,57 @@ function vk_upload_mesh!(cache::VulkanGPUResourceCache, device::Device,
         return cache.meshes[entity_id]
     end
 
-    # Upload positions
-    pos_data = reinterpret(Float32, mesh.vertices)
-    pos_size = sizeof(pos_data)
-    vertex_buffer, vertex_memory = _upload_to_device_local(
-        device, physical_device, command_pool, queue,
-        Vector{UInt8}(reinterpret(UInt8, pos_data)), pos_size,
-        BUFFER_USAGE_VERTEX_BUFFER_BIT
+    # Upload positions (HOST_VISIBLE for direct CPU access)
+    pos_bytes = collect(reinterpret(UInt8, collect(reinterpret(Float32, mesh.vertices))))
+    pos_size = length(pos_bytes)
+    vertex_buffer, vertex_memory = vk_create_buffer(
+        device, physical_device, pos_size,
+        BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        MEMORY_PROPERTY_HOST_VISIBLE_BIT | MEMORY_PROPERTY_HOST_COHERENT_BIT
     )
+    let ptr = unwrap(map_memory(device, vertex_memory, UInt64(0), UInt64(pos_size)))
+        GC.@preserve pos_bytes unsafe_copyto!(Ptr{UInt8}(ptr), pointer(pos_bytes), pos_size)
+        unmap_memory(device, vertex_memory)
+    end
 
     # Upload normals
-    norm_data = reinterpret(Float32, mesh.normals)
-    norm_size = sizeof(norm_data)
-    normal_buffer, normal_memory = _upload_to_device_local(
-        device, physical_device, command_pool, queue,
-        Vector{UInt8}(reinterpret(UInt8, norm_data)), norm_size,
-        BUFFER_USAGE_VERTEX_BUFFER_BIT
+    norm_bytes = collect(reinterpret(UInt8, collect(reinterpret(Float32, mesh.normals))))
+    norm_size = length(norm_bytes)
+    normal_buffer, normal_memory = vk_create_buffer(
+        device, physical_device, norm_size,
+        BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        MEMORY_PROPERTY_HOST_VISIBLE_BIT | MEMORY_PROPERTY_HOST_COHERENT_BIT
     )
+    let ptr = unwrap(map_memory(device, normal_memory, UInt64(0), UInt64(norm_size)))
+        GC.@preserve norm_bytes unsafe_copyto!(Ptr{UInt8}(ptr), pointer(norm_bytes), norm_size)
+        unmap_memory(device, normal_memory)
+    end
 
     # Upload UVs
-    uv_data = reinterpret(Float32, mesh.uvs)
-    uv_size = sizeof(uv_data)
-    uv_buffer, uv_memory = _upload_to_device_local(
-        device, physical_device, command_pool, queue,
-        Vector{UInt8}(reinterpret(UInt8, uv_data)), uv_size,
-        BUFFER_USAGE_VERTEX_BUFFER_BIT
+    uv_bytes = collect(reinterpret(UInt8, collect(reinterpret(Float32, mesh.uvs))))
+    uv_size = length(uv_bytes)
+    uv_buffer, uv_memory = vk_create_buffer(
+        device, physical_device, uv_size,
+        BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        MEMORY_PROPERTY_HOST_VISIBLE_BIT | MEMORY_PROPERTY_HOST_COHERENT_BIT
     )
+    let ptr = unwrap(map_memory(device, uv_memory, UInt64(0), UInt64(uv_size)))
+        GC.@preserve uv_bytes unsafe_copyto!(Ptr{UInt8}(ptr), pointer(uv_bytes), uv_size)
+        unmap_memory(device, uv_memory)
+    end
 
     # Upload indices
-    idx_data = mesh.indices
-    idx_size = sizeof(idx_data)
-    index_buffer, index_memory = _upload_to_device_local(
-        device, physical_device, command_pool, queue,
-        Vector{UInt8}(reinterpret(UInt8, idx_data)), idx_size,
-        BUFFER_USAGE_INDEX_BUFFER_BIT
+    idx_bytes = collect(reinterpret(UInt8, mesh.indices))
+    idx_size = length(idx_bytes)
+    index_buffer, index_memory = vk_create_buffer(
+        device, physical_device, idx_size,
+        BUFFER_USAGE_INDEX_BUFFER_BIT,
+        MEMORY_PROPERTY_HOST_VISIBLE_BIT | MEMORY_PROPERTY_HOST_COHERENT_BIT
     )
+    let ptr = unwrap(map_memory(device, index_memory, UInt64(0), UInt64(idx_size)))
+        GC.@preserve idx_bytes unsafe_copyto!(Ptr{UInt8}(ptr), pointer(idx_bytes), idx_size)
+        unmap_memory(device, index_memory)
+    end
 
     # Upload bone weights and indices (if available for skeletal animation)
     bone_weight_buf = nothing

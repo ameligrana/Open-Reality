@@ -385,7 +385,8 @@ function _ibl_create_render_pass(device::Device, format::Format)
     dep = SubpassDependency(
         VK_SUBPASS_EXTERNAL, UInt32(0),
         PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        AccessFlag(0), ACCESS_COLOR_ATTACHMENT_WRITE_BIT
+        AccessFlag(0), ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        DependencyFlag(0)
     )
     return unwrap(create_render_pass(device, RenderPassCreateInfo([attachment], [subpass], [dep])))
 end
@@ -526,6 +527,8 @@ function vk_create_ibl_environment(device::Device, physical_device::PhysicalDevi
 
     # Create framebuffers and render 6 faces
     cmd = vk_begin_single_time_commands(device, command_pool)
+    temp_framebuffers = Vulkan.Framebuffer[]  # Defer destruction until after submission
+    temp_views = ImageView[]
 
     for face in 1:6
         fb = unwrap(create_framebuffer(device, FramebufferCreateInfo(
@@ -540,7 +543,7 @@ function vk_create_ibl_environment(device::Device, physical_device::PhysicalDevi
         _ibl_render_face!(cmd, rgba16f_rp, fb, equirect_pipeline, cube_buffer,
             push_data, IBL_CUBEMAP_SIZE; descriptor_set=equirect_ds)
 
-        finalize(fb)
+        push!(temp_framebuffers, fb)
     end
 
     _ibl_transition_cubemap_to_readable!(cmd, env_image)
@@ -573,7 +576,7 @@ function vk_create_ibl_environment(device::Device, physical_device::PhysicalDevi
         _ibl_render_face!(cmd, rgba16f_rp, fb, irradiance_pipeline, cube_buffer,
             push_data, IBL_IRRADIANCE_SIZE; descriptor_set=env_cubemap_ds)
 
-        finalize(fb)
+        push!(temp_framebuffers, fb)
     end
 
     _ibl_transition_cubemap_to_readable!(cmd, irr_image)
@@ -613,13 +616,13 @@ function vk_create_ibl_environment(device::Device, physical_device::PhysicalDevi
             _ibl_render_face!(cmd, rgba16f_rp, fb, prefilter_pipeline, cube_buffer,
                 push_data, mip_size; descriptor_set=env_cubemap_ds)
 
-            finalize(fb)
+            push!(temp_framebuffers, fb)
         end
 
-        # Destroy extra mip face views (mip 0 views are kept for cleanup)
+        # Defer mip face view destruction (mip 0 views are kept for final cleanup)
         if mip > 0
             for fv in mip_face_views
-                finalize(fv)
+                push!(temp_views, fv)
             end
         end
     end
@@ -678,7 +681,7 @@ function vk_create_ibl_environment(device::Device, physical_device::PhysicalDevi
                          -1,-1, 0,0,  1,1, 1,1,  -1,1, 0,1]
     quad_buf_size = length(quad_verts) * sizeof(Float32)
     q_staging, q_smem = vk_create_buffer(device, physical_device, quad_buf_size,
-        BUFFER_USAGE_TRANSFER_SRC_BIT,
+        BUFFER_USAGE_VERTEX_BUFFER_BIT,
         MEMORY_PROPERTY_HOST_VISIBLE_BIT | MEMORY_PROPERTY_HOST_COHERENT_BIT)
     q_ptr = unwrap(map_memory(device, q_smem, UInt64(0), UInt64(quad_buf_size)))
     GC.@preserve quad_verts unsafe_copyto!(Ptr{Float32}(q_ptr), pointer(quad_verts), length(quad_verts))
@@ -707,8 +710,11 @@ function vk_create_ibl_environment(device::Device, physical_device::PhysicalDevi
     vk_end_single_time_commands(device, command_pool, queue, cmd)
 
     # ============================================================
-    # Cleanup temporary resources
+    # Cleanup temporary resources (AFTER submission — safe to destroy)
     # ============================================================
+    for fb in temp_framebuffers; finalize(fb); end
+    for fv in temp_views; finalize(fv); end
+
     finalize(equirect_pipeline.pipeline); finalize(equirect_pipeline.pipeline_layout)
     equirect_pipeline.vert_module !== nothing && finalize(equirect_pipeline.vert_module)
     equirect_pipeline.frag_module !== nothing && finalize(equirect_pipeline.frag_module)
@@ -766,8 +772,13 @@ end
     _load_hdr_image(path) -> (Vector{UInt8}, Int, Int)
 
 Load an HDR image and convert to RGBA16F pixel data.
+If path is "sky", generates a procedural sky gradient (blue sky → white horizon → warm ground).
 """
 function _load_hdr_image(path::String)
+    if path == "sky"
+        return _generate_procedural_sky()
+    end
+
     img = FileIO.load(path)
     h, w = size(img)
 
@@ -785,6 +796,83 @@ function _load_hdr_image(path::String)
                 u = reinterpret(UInt16, val)
                 pixels[idx] = u % UInt8
                 pixels[idx + 1] = (u >> 8) % UInt8
+                idx += 2
+            end
+        end
+    end
+
+    return pixels, w, h
+end
+
+"""
+    _generate_procedural_sky() -> (Vector{UInt8}, Int, Int)
+
+Generate a procedural sky gradient as an equirectangular RGBA16F image.
+Blue sky at zenith, white/yellow at horizon, warm brown at ground.
+"""
+function _generate_procedural_sky()
+    w = 512
+    h = 256
+
+    pixels = Vector{UInt8}(undef, w * h * 8)
+    idx = 1
+
+    for row in 1:h
+        # Map row to elevation: row 1 = top (zenith), row h = bottom (nadir)
+        v = Float32(row - 1) / Float32(h - 1)  # 0=top, 1=bottom
+        elevation = Float32(π) * (1.0f0 - v) - Float32(π) / 2.0f0  # +π/2 (zenith) to -π/2 (nadir)
+        sin_el = sin(elevation)
+
+        if sin_el > 0.0f0
+            # Sky (above horizon)
+            t = sin_el
+            # Zenith: deep blue (0.2, 0.4, 0.9) → Horizon: warm white (1.2, 1.1, 1.0)
+            sky_zenith = (0.2f0, 0.4f0, 0.9f0)
+            sky_horizon = (1.5f0, 1.3f0, 1.1f0)
+            r = sky_horizon[1] + (sky_zenith[1] - sky_horizon[1]) * t
+            g = sky_horizon[2] + (sky_zenith[2] - sky_horizon[2]) * t
+            b = sky_horizon[3] + (sky_zenith[3] - sky_horizon[3]) * t
+        else
+            # Ground (below horizon)
+            t = -sin_el
+            # Horizon: warm (0.6, 0.5, 0.4) → Nadir: dark ground (0.15, 0.12, 0.1)
+            gnd_horizon = (0.6f0, 0.5f0, 0.4f0)
+            gnd_nadir = (0.15f0, 0.12f0, 0.1f0)
+            r = gnd_horizon[1] + (gnd_nadir[1] - gnd_horizon[1]) * t
+            g = gnd_horizon[2] + (gnd_nadir[2] - gnd_horizon[2]) * t
+            b = gnd_horizon[3] + (gnd_nadir[3] - gnd_horizon[3]) * t
+        end
+
+        for col in 1:w
+            # Add sun disc (directional light hint for specular reflections)
+            u = Float32(col - 1) / Float32(w - 1)
+            azimuth = 2.0f0 * Float32(π) * u - Float32(π)
+            # Sun at azimuth=0.3, elevation=0.5 radians
+            sun_az = 0.3f0
+            sun_el = 0.5f0
+            # Angular distance to sun
+            cos_angle = sin(elevation) * sin(sun_el) + cos(elevation) * cos(sun_el) * cos(azimuth - sun_az)
+            sun_angle = acos(clamp(cos_angle, -1.0f0, 1.0f0))
+
+            sr, sg, sb = r, g, b
+            if sun_angle < 0.05f0
+                # Sun core
+                sun_strength = (1.0f0 - sun_angle / 0.05f0) * 20.0f0
+                sr += sun_strength * 1.0f0
+                sg += sun_strength * 0.95f0
+                sb += sun_strength * 0.85f0
+            elseif sun_angle < 0.3f0
+                # Sun glow
+                glow = (1.0f0 - (sun_angle - 0.05f0) / 0.25f0)^2 * 2.0f0
+                sr += glow * 1.0f0
+                sg += glow * 0.9f0
+                sb += glow * 0.7f0
+            end
+
+            for val in (Float16(sr), Float16(sg), Float16(sb), Float16(1.0))
+                x = reinterpret(UInt16, val)
+                pixels[idx] = x % UInt8
+                pixels[idx + 1] = (x >> 8) % UInt8
                 idx += 2
             end
         end

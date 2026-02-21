@@ -683,18 +683,35 @@ function render_frame!(backend::VulkanBackend, scene::Scene)
         return
     end
 
+    # Lazy IBL initialization (first frame with IBLComponent creates the environment)
+    if backend.deferred_pipeline !== nothing && backend.deferred_pipeline.ibl_env === nothing &&
+       frame_data.lights.has_ibl
+        try
+            ibl = backend_create_ibl_environment!(backend,
+                frame_data.lights.ibl_path, frame_data.lights.ibl_intensity)
+            # Ensure all IBL GPU work is complete before starting the render frame
+            unwrap(device_wait_idle(backend.device))
+            @info "Vulkan IBL environment created" path=frame_data.lights.ibl_path
+        catch e
+            @warn "Failed to create IBL environment, using fallback ambient" exception=e
+        end
+    end
+
     # Reset and begin command buffer
     cmd = backend.command_buffers[frame_idx]
     unwrap(reset_command_buffer(cmd))
     unwrap(begin_command_buffer(cmd, CommandBufferBeginInfo()))
 
-    # Flip Y for Vulkan's Y-down NDC (OpenGL projection has Y-up)
+    # Convert OpenGL projection to Vulkan conventions:
+    # 1. Flip Y for Vulkan's Y-down NDC (OpenGL projection has Y-up)
+    # 2. Remap depth from [-1,1] (OpenGL) to [0,1] (Vulkan)
+    #    Z_vk = 0.5 * Z_gl + 0.5 * W_gl → new row3 = 0.5*row3 + 0.5*row4
     proj = frame_data.proj
     vk_proj = Mat4f(
         proj[1], proj[2], proj[3], proj[4],
         proj[5], -proj[6], proj[7], proj[8],
-        proj[9], proj[10], proj[11], proj[12],
-        proj[13], proj[14], proj[15], proj[16]
+        proj[9], proj[10], 0.5f0*proj[11] + 0.5f0*proj[12], proj[12],
+        proj[13], proj[14], 0.5f0*proj[15] + 0.5f0*proj[16], proj[16]
     )
 
     # Update per-frame UBO
@@ -1068,7 +1085,7 @@ function _render_gbuffer_pass!(cmd::CommandBuffer, backend::VulkanBackend,
     end
 
     # === Render singles (non-instanced entities, including skinned) ===
-    for entity_data in singles
+    for (ei, entity_data) in enumerate(singles)
         eid = entity_data.entity_id
         mesh = entity_data.mesh
 

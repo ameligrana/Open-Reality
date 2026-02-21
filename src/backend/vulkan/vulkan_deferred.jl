@@ -354,9 +354,9 @@ void main() {
     vec4 emissiveAO = texture(gEmissiveAO, fragUV);
     float depth = texture(gDepth, fragUV).r;
 
-    // Skip background pixels (no geometry rendered)
+    // Skip background pixels
     if (depth >= 1.0) {
-        outColor = vec4(0.1, 0.1, 0.1, 1.0);
+        outColor = vec4(0.0, 0.0, 0.0, 1.0);
         return;
     }
 
