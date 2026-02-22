@@ -100,15 +100,16 @@ s = scene([
     ])
 ])`
 
-const installCode = `# Clone the repository
+const installBash = `curl -fsSL https://open-reality.com/install.sh | sh`
+
+const installPowershell = `irm https://open-reality.com/install.ps1 | iex`
+
+const installSource = `# Or build from source
 git clone https://github.com/sinisterMage/Open-Reality.git
 cd OpenReality
+julia --project=. -e 'using Pkg; Pkg.instantiate()'`
 
-# Install Julia dependencies
-julia --project=. -e 'using Pkg; Pkg.instantiate()'
-
-# Run the test suite
-julia --project=. -e 'using Pkg; Pkg.test()'`
+const activeTab = ref<'unix' | 'windows'>('unix')
 </script>
 
 <template>
@@ -270,10 +271,55 @@ julia --project=. -e 'using Pkg; Pkg.test()'`
             <span class="text-or-green">#</span> Get Started
           </h2>
           <p class="text-or-text-dim mt-3">
-            Clone, install, and run in three commands.
+            Install the CLI with a single command.
           </p>
         </div>
-        <CodeBlock :code="installCode" lang="bash" filename="terminal" />
+
+        <!-- Platform tabs -->
+        <div class="flex gap-2 mb-4">
+          <button
+            class="px-4 py-2 font-mono text-sm rounded-t border border-or-border transition-colors"
+            :class="activeTab === 'unix'
+              ? 'bg-or-panel text-or-green border-b-transparent'
+              : 'bg-or-surface text-or-text-dim hover:text-or-text'"
+            @click="activeTab = 'unix'"
+          >
+            Linux / macOS
+          </button>
+          <button
+            class="px-4 py-2 font-mono text-sm rounded-t border border-or-border transition-colors"
+            :class="activeTab === 'windows'
+              ? 'bg-or-panel text-or-green border-b-transparent'
+              : 'bg-or-surface text-or-text-dim hover:text-or-text'"
+            @click="activeTab = 'windows'"
+          >
+            Windows
+          </button>
+        </div>
+
+        <CodeBlock
+          v-if="activeTab === 'unix'"
+          :code="installBash"
+          lang="bash"
+          filename="terminal"
+        />
+        <CodeBlock
+          v-else
+          :code="installPowershell"
+          lang="powershell"
+          filename="powershell"
+        />
+
+        <!-- From source -->
+        <details class="mt-6 group">
+          <summary class="cursor-pointer font-mono text-sm text-or-text-dim hover:text-or-text transition-colors">
+            Build from source
+          </summary>
+          <div class="mt-3">
+            <CodeBlock :code="installSource" lang="bash" filename="terminal" />
+          </div>
+        </details>
+
         <div class="text-center mt-8">
           <NuxtLink
             to="/docs"

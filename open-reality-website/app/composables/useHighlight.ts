@@ -6,7 +6,7 @@ function getHighlighter() {
   if (!highlighterPromise) {
     highlighterPromise = createHighlighter({
       themes: ['github-dark-default'],
-      langs: ['julia', 'bash', 'toml', 'json'],
+      langs: ['julia', 'bash', 'toml', 'json', 'powershell'],
     })
   }
   return highlighterPromise
