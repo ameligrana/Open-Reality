@@ -4,6 +4,7 @@ version = "0.1.0"
 authors = ["OpenReality Contributors"]
 
 [deps]
+Ark = "56664e29-41e4-4ea5-ab0e-825499acc647"
 Base64 = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 ColorTypes = "3da002f7-5984-5a60-b8a6-cbb66c0b333f"
 FileIO = "5789e2e9-d7fb-5bc7-8068-2c6fae9b9549"
@@ -15,14 +16,14 @@ ImageIO = "82e4d734-157c-48bb-816b-45c225c6df19"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 MeshIO = "7269a6da-0436-5bbc-96c2-40638cbb6118"
 ModernGL = "66fc600b-dfda-50eb-8b99-91cfa97b1301"
-OpenAL_jll = "c52b6589-6b5d-587d-9bb5-adf8a44d3946"
 Observables = "510215fc-4207-5dde-b226-833fc4488ee2"
+OpenAL_jll = "c52b6589-6b5d-587d-9bb5-adf8a44d3946"
 Quaternions = "94ee1d12-ae83-5a48-8b1c-48b8ff168ae0"
 Serialization = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
 StaticArrays = "90137ffa-7385-5640-81b9-e52037218182"
+TOML = "fa267f1f-6049-4f14-aa54-33bafae1ed76"
 Vulkan = "9f14b124-c50e-4008-a7d4-969b3a6cd68a"
 glslang_jll = "6fd5517d-459c-5c5a-9b1a-c968b4e37a81"
-Ark = "56664e29-41e4-4ea5-ab0e-825499acc647"
 
 [compat]
 Base64 = "1.11.0"
@@ -37,6 +38,7 @@ ModernGL = "1"
 Observables = "0.5"
 Quaternions = "0.7.7"
 StaticArrays = "1.5"
+TOML = "1.0.3"
 julia = "1.9"
 
 [extras]

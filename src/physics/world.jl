@@ -243,7 +243,7 @@ function fixed_step!(world::PhysicsWorld, dt::Float64)
         collider.is_trigger && continue
         aabb = get_entity_physics_aabb(eid)
         aabb === nothing && continue
-        insert!(world.broadphase, eid, aabb)
+        insert!(world.broadphase, eid, aabb; layer=collider.layer, mask=collider.mask)
     end
     candidate_pairs = query_pairs(world.broadphase)
 

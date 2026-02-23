@@ -53,6 +53,10 @@ pending spawns.
 function apply_mutations!(ctx::GameContext, scene::Scene)::Scene
     # --- despawns ---
     for eid in ctx._despawn_queue
+        # Cancel entity-scoped timers, coroutines, and tweens
+        cancel_entity_timers!(eid)
+        cancel_entity_coroutines!(eid)
+        cancel_entity_tweens!(eid)
         scene = destroy_entity!(scene, eid; ctx=ctx)
     end
 

@@ -292,5 +292,13 @@ function reset_engine_state!()
     reset_asset_manager!()
     reset_async_loader!()
     reset_event_bus!()
+    reset_game_config!()
+    reset_timer_manager!()
+    reset_coroutine_manager!()
+    reset_tween_manager!()
+    reset_debug_console!()
+    reset_item_registry!()
+    reset_quest_manager!()
+    reset_dialogue_manager!()
     return nothing
 end

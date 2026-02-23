@@ -64,6 +64,7 @@ include("components/skeleton.jl")
 include("components/particle_system.jl")
 include("components/terrain.jl")
 include("components/script.jl")
+include("components/inventory.jl")
 
 # Physics engine (after rigidbody — solver/world use RigidBodyComponent)
 include("physics/inertia.jl")
@@ -101,12 +102,26 @@ include("systems/audio.jl")
 include("systems/particles.jl")
 include("systems/scripts.jl")
 
-# Game State Machine (prefab → context → state_machine: resolve forward references)
+# Game logic (event_bus first for GameEvent; then prefab → context → state_machine → game_manager)
+include("game/event_bus.jl")
 include("game/prefab.jl")
 include("game/context.jl")
-include("game/state_machine.jl")
+include("game/state_machine.jl")    # uses GameContext + GameEvent
 include("game/game_manager.jl")
-include("game/event_bus.jl")
+include("components/health.jl")     # HealthComponent events subtype GameEvent
+include("game/config.jl")
+include("game/timers.jl")
+include("game/coroutines.jl")
+include("game/tweens.jl")
+include("game/behavior_tree.jl")
+include("game/items.jl")
+include("game/quests.jl")
+include("game/dialogue.jl")
+include("game/debug_console.jl")
+
+# Gameplay systems (after game modules — these use emit!, despawn!, get_item_def)
+include("systems/health.jl")
+include("systems/inventory.jl")
 
 # Debug utilities (ENV-gated, zero overhead when OPENREALITY_DEBUG = false)
 include("debug/debug_draw.jl")
@@ -305,6 +320,13 @@ const COMPONENT_TYPES = DataType[
     TriggerComponent,
     # Collision
     CollisionCallbackComponent,
+    # Health
+    HealthComponent,
+    # Inventory
+    InventoryComponent,
+    PickupComponent,
+    # Behavior Tree
+    BehaviorTreeComponent,
 ]
 
 # Initialize the global Ark world with all components
@@ -625,6 +647,97 @@ export GameEvent, EventBus, get_event_bus, reset_event_bus!, subscribe!, emit!, 
 # Export Game State Machine
 export GameState, StateTransition, GameStateMachine
 export add_state!, on_enter!, on_update!, on_exit!, get_ui_callback
+export TransitionGuard, TransitionDef, CompositeState
+export add_transition!, transition!, transition_to_previous!
+export has_state, remove_state!
+
+# Export Enhanced Event Bus
+export subscribe_once!, emit_deferred!, flush_deferred_events!
+export EventListener, EventContext
+
+# Export Game Config
+export GameConfig, get_game_config, reset_game_config!
+export get_config, set_config!, load_config_from_file!, check_config_reload!
+export register_difficulty!, apply_difficulty!
+
+# Export Timers
+export TimerID, timer_once!, timer_interval!, cancel_timer!, pause_timer!, resume_timer!
+export cancel_entity_timers!, update_timers!, reset_timer_manager!
+
+# Export Coroutines
+export CoroutineID, CoroutineContext
+export start_coroutine!, cancel_coroutine!, cancel_entity_coroutines!
+export yield_wait, yield_frames, yield_until
+export update_coroutines!, reset_coroutine_manager!
+
+# Export Tweens
+export TweenID, TweenLoopMode, TWEEN_ONCE, TWEEN_LOOP, TWEEN_PING_PONG
+export tween!, cancel_tween!, cancel_entity_tweens!, then!, tween_sequence!
+export update_tweens!, reset_tween_manager!
+export ease_linear, ease_in_quad, ease_out_quad, ease_in_out_quad
+export ease_in_cubic, ease_out_cubic, ease_in_out_cubic
+export ease_in_sine, ease_out_sine, ease_in_out_sine
+export ease_in_expo, ease_out_expo, ease_in_out_expo
+export ease_in_back, ease_out_back, ease_in_out_back
+export ease_in_bounce, ease_out_bounce, ease_in_out_bounce
+export ease_in_elastic, ease_out_elastic, ease_in_out_elastic
+
+# Export Health/Damage
+export DamageType, DAMAGE_PHYSICAL, DAMAGE_FIRE, DAMAGE_ICE, DAMAGE_ELECTRIC, DAMAGE_MAGIC, DAMAGE_TRUE
+export HealthComponent, DamageEvent, HealEvent, DeathEvent
+export apply_damage!, heal!, is_dead, get_hp, get_hp_fraction
+export update_health_system!
+
+# Export Collision Layers
+export LAYER_DEFAULT, LAYER_PLAYER, LAYER_ENEMY, LAYER_TERRAIN
+export LAYER_PROJECTILE, LAYER_PICKUP, LAYER_TRIGGER, LAYER_ALL
+export register_layer!, get_layer, layers_interact
+export set_collision_layer!, set_collision_mask!
+
+# Export Behavior Trees
+export BTStatus, BT_SUCCESS, BT_FAILURE, BT_RUNNING
+export BTNode, SequenceNode, SelectorNode, ParallelNode
+export ActionNode, ConditionNode
+export InverterNode, RepeatNode, SucceederNode, TimeoutNode
+export Blackboard, bb_get, bb_set!, bb_has, bb_delete!
+export BehaviorTreeComponent
+export bt_sequence, bt_selector, bt_parallel, bt_action, bt_condition
+export bt_invert, bt_repeat, bt_succeed, bt_timeout
+export bt_move_to, bt_wait, bt_set_bb, bt_has_bb
+export update_behavior_trees!
+
+# Export Items
+export ItemType, ITEM_CONSUMABLE, ITEM_EQUIPMENT, ITEM_MATERIAL, ITEM_KEY, ITEM_QUEST
+export ItemDef, ItemRegistry, register_item!, get_item_def, reset_item_registry!
+export ItemPickedUpEvent, ItemUsedEvent, ItemDroppedEvent
+
+# Export Inventory
+export ItemStack, InventoryComponent, PickupComponent
+export add_item!, remove_item!, has_item, get_item_count, use_item!, get_inventory_slots
+export update_pickups!
+
+# Export Quests
+export ObjectiveType, OBJ_COLLECT, OBJ_KILL, OBJ_REACH_LOCATION, OBJ_INTERACT, OBJ_CUSTOM
+export QuestState, QUEST_NOT_STARTED, QUEST_ACTIVE, QUEST_COMPLETED, QUEST_FAILED
+export ObjectiveDef, QuestReward, QuestDef, ActiveQuest
+export QuestStartedEvent, ObjectiveProgressEvent, QuestCompletedEvent, QuestFailedEvent
+export register_quest!, start_quest!, advance_objective!, complete_quest!, fail_quest!
+export is_quest_active, is_quest_completed, get_quest_progress, get_active_quest_ids
+export reset_quest_manager!
+
+# Export Dialogue
+export DialogueChoice, DialogueNode, DialogueTree
+export DialogueStartedEvent, DialogueChoiceEvent, DialogueEndedEvent
+export start_dialogue!, select_choice!, advance!, end_dialogue!
+export is_dialogue_active, get_current_dialogue_node, get_available_choices
+export update_dialogue_input!, render_dialogue!
+export reset_dialogue_manager!
+
+# Export Debug Console
+export DebugConsole, register_command!, execute_command!
+export watch!, unwatch!
+export update_debug_console!, render_debug_console!
+export reset_debug_console!
 
 # Export DebugDraw
 export OPENREALITY_DEBUG, debug_line!, debug_box!, debug_sphere!, flush_debug_draw!

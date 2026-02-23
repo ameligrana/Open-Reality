@@ -6,7 +6,8 @@
 Cast a ray into the world and return the closest hit.
 Direction does not need to be normalized (will be normalized internally).
 """
-function raycast(origin::Vec3d, direction::Vec3d; max_distance::Float64=Inf)
+function raycast(origin::Vec3d, direction::Vec3d;
+                 max_distance::Float64=Inf, layer_mask::UInt32=LAYER_ALL)
     d_len = vec3d_length(direction)
     if d_len < COLLISION_EPSILON
         return nothing
@@ -18,6 +19,7 @@ function raycast(origin::Vec3d, direction::Vec3d; max_distance::Float64=Inf)
 
     iterate_components(ColliderComponent) do eid, collider
         collider.is_trigger && return  # Skip triggers
+        (collider.layer & layer_mask) == 0 && return  # Skip non-matching layers
         tc = get_component(eid, TransformComponent)
         tc === nothing && return
 
@@ -37,7 +39,8 @@ end
 
 Cast a ray and return all hits sorted by distance.
 """
-function raycast_all(origin::Vec3d, direction::Vec3d; max_distance::Float64=Inf)
+function raycast_all(origin::Vec3d, direction::Vec3d;
+                     max_distance::Float64=Inf, layer_mask::UInt32=LAYER_ALL)
     d_len = vec3d_length(direction)
     if d_len < COLLISION_EPSILON
         return RaycastHit[]
@@ -48,6 +51,7 @@ function raycast_all(origin::Vec3d, direction::Vec3d; max_distance::Float64=Inf)
 
     iterate_components(ColliderComponent) do eid, collider
         collider.is_trigger && return
+        (collider.layer & layer_mask) == 0 && return  # Skip non-matching layers
         tc = get_component(eid, TransformComponent)
         tc === nothing && return
 

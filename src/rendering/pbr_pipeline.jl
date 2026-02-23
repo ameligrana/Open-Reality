@@ -257,6 +257,14 @@ function run_render_loop!(initial_scene::Scene;
             # Script step (per-entity script callbacks)
             update_scripts!(dt, ctx)
 
+            # Gameplay systems step
+            update_timers!(dt)
+            update_coroutines!(dt)
+            update_tweens!(dt)
+            update_behavior_trees!(dt)
+            update_health_system!(ctx)
+            update_pickups!(dt, ctx)
+
             # Audio step (sync listener/source positions with transforms)
             update_audio!(dt)
 
@@ -274,6 +282,13 @@ function run_render_loop!(initial_scene::Scene;
                 update_terrain!(_cam_pos, _frustum)
             end
 
+            # Dialogue & debug console input (consume before game logic)
+            update_dialogue_input!(backend_get_input(backend))
+            update_debug_console!(backend_get_input(backend), dt)
+
+            # Game config hot-reload
+            check_config_reload!()
+
             # on_update callback — return Vector{EntityDef} to trigger scene switch
             if on_update !== nothing
                 result = on_update(current_scene, dt, ctx)
@@ -285,6 +300,7 @@ function run_render_loop!(initial_scene::Scene;
             end
 
             current_scene = apply_mutations!(ctx, current_scene)
+            flush_deferred_events!()
 
             # Free GPU resources for entities removed this frame
             flush_gpu_cleanup!(backend)
@@ -466,6 +482,14 @@ function run_render_loop!(fsm::GameStateMachine;
             # Script step (per-entity script callbacks)
             update_scripts!(dt, ctx)
 
+            # Gameplay systems step
+            update_timers!(dt)
+            update_coroutines!(dt)
+            update_tweens!(dt)
+            update_behavior_trees!(dt)
+            update_health_system!(ctx)
+            update_pickups!(dt, ctx)
+
             # Audio step (sync listener/source positions with transforms)
             update_audio!(dt)
 
@@ -482,6 +506,13 @@ function run_render_loop!(fsm::GameStateMachine;
                 _frustum = extract_frustum(_proj * _view)
                 update_terrain!(_cam_pos, _frustum)
             end
+
+            # Dialogue & debug console input (consume before game logic)
+            update_dialogue_input!(backend_get_input(backend))
+            update_debug_console!(backend_get_input(backend), dt)
+
+            # Game config hot-reload
+            check_config_reload!()
 
             # FSM on_update! — return StateTransition to switch states
             transition = nothing
@@ -520,10 +551,12 @@ function run_render_loop!(fsm::GameStateMachine;
                 if transition.new_scene_defs === nothing
                     current_scene = apply_mutations!(ctx, current_scene)
                 end
+                flush_deferred_events!()
                 continue  # skip render this frame
             end
 
             current_scene = apply_mutations!(ctx, current_scene)
+            flush_deferred_events!()
 
             # Wire UI callback from current state (falls back to ui kwarg)
             ui_cb = get_ui_callback(current_state)

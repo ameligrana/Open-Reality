@@ -88,6 +88,15 @@ function update_triggers!()
         for (other_eid, other_aabb) in collidable
             other_eid == trigger_eid && continue
 
+            # Layer filtering
+            other_collider = get_component(other_eid, ColliderComponent)
+            if other_collider !== nothing
+                if !layers_interact(trigger_collider.layer, trigger_collider.mask,
+                                    other_collider.layer, other_collider.mask)
+                    continue
+                end
+            end
+
             # Broadphase: AABB overlap
             if !aabb_overlap(trigger_aabb, other_aabb)
                 continue

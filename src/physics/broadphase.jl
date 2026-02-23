@@ -12,12 +12,14 @@ mutable struct SpatialHashGrid
     inv_cell_size::Float64
     cells::Dict{Tuple{Int,Int,Int}, Vector{EntityID}}
     entity_aabbs::Dict{EntityID, AABB3D}
+    entity_layers::Dict{EntityID, Tuple{UInt32, UInt32}}  # (layer, mask) per entity
 end
 
 function SpatialHashGrid(; cell_size::Float64 = 2.0)
     SpatialHashGrid(cell_size, 1.0 / cell_size,
                     Dict{Tuple{Int,Int,Int}, Vector{EntityID}}(),
-                    Dict{EntityID, AABB3D}())
+                    Dict{EntityID, AABB3D}(),
+                    Dict{EntityID, Tuple{UInt32, UInt32}}())
 end
 
 """
@@ -28,6 +30,7 @@ Remove all entities from the grid.
 function clear!(grid::SpatialHashGrid)
     empty!(grid.cells)
     empty!(grid.entity_aabbs)
+    empty!(grid.entity_layers)
 end
 
 """
@@ -44,8 +47,10 @@ end
 
 Insert an entity into all grid cells that its AABB overlaps.
 """
-function Base.insert!(grid::SpatialHashGrid, entity_id::EntityID, aabb::AABB3D)
+function Base.insert!(grid::SpatialHashGrid, entity_id::EntityID, aabb::AABB3D;
+                      layer::UInt32 = LAYER_DEFAULT, mask::UInt32 = LAYER_ALL)
     grid.entity_aabbs[entity_id] = aabb
+    grid.entity_layers[entity_id] = (layer, mask)
 
     min_x = _cell_coord(grid, aabb.min_pt[1])
     min_y = _cell_coord(grid, aabb.min_pt[2])
@@ -88,6 +93,14 @@ function query_pairs(grid::SpatialHashGrid)
                 key = a < b ? (a, b) : (b, a)
                 if !(key in seen)
                     push!(seen, key)
+
+                    # Check collision layer compatibility
+                    la, ma = get(grid.entity_layers, key[1], (LAYER_DEFAULT, LAYER_ALL))
+                    lb, mb = get(grid.entity_layers, key[2], (LAYER_DEFAULT, LAYER_ALL))
+                    if !layers_interact(la, ma, lb, mb)
+                        continue
+                    end
+
                     # Verify AABB overlap (cells can be coarse)
                     aabb_a = grid.entity_aabbs[key[1]]
                     aabb_b = grid.entity_aabbs[key[2]]
