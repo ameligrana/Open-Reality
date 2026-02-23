@@ -26,14 +26,27 @@ Download from [lunarg.com](https://vulkan.lunarg.com/sdk/home). On Linux you can
 
 ## Installation
 
-Clone the repository and install it as a development package:
+### One-liner (recommended)
 
-```julia
-using Pkg
-Pkg.develop(path="/path/to/OpenReality")
+```bash
+# Linux / macOS
+curl -fsSL https://open-reality.com/install.sh | sh
+
+# Windows PowerShell
+irm https://open-reality.com/install.ps1 | iex
 ```
 
-Then load it:
+### Build from source
+
+Clone the repository and install dependencies:
+
+```bash
+git clone https://github.com/sinisterMage/Open-Reality.git
+cd OpenReality
+julia --project=. -e 'using Pkg; Pkg.instantiate()'
+```
+
+Then load it in your scripts:
 
 ```julia
 using OpenReality
@@ -779,4 +792,248 @@ s = scene([
 ])
 
 render(s)
+```
+
+---
+
+## Tutorial 15: Timers & Coroutines
+
+Use timers for delayed actions and coroutines for sequential logic spanning multiple frames.
+
+```julia
+using OpenReality
+
+# One-shot timer
+timer_once!(3.0, () -> @info "3 seconds passed!")
+
+# Repeating timer
+timer_interval!(1.0, () -> @info "Tick!"; repeats=5)
+
+# Entity-scoped timer (auto-cancels on despawn)
+timer_once!(2.0, () -> explode!(eid); owner=eid)
+
+# Cooperative coroutine
+start_coroutine!() do ctx
+    yield_wait(ctx, 1.0)        # wait 1 second
+    @info "1 second passed"
+    yield_frames(ctx, 60)       # wait 60 frames
+    @info "60 frames passed"
+    yield_until(ctx, () -> is_quest_completed(:rescue))
+    @info "Quest completed!"
+end
+```
+
+---
+
+## Tutorial 16: Tweens & Easing
+
+Animate entity properties over time with configurable easing curves.
+
+```julia
+using OpenReality
+
+# Tween position with cubic easing
+tween!(eid, :position, Vec3d(10, 5, 0), 2.0;
+       easing=ease_in_out_cubic)
+
+# Ping-pong scale animation (loops forever)
+tween!(eid, :scale, Vec3d(1.5, 1.5, 1.5), 0.8;
+       easing=ease_in_out_sine,
+       loop_mode=TWEEN_PING_PONG,
+       loop_count=-1)
+
+# Chain tweens into a sequence
+a = tween!(eid, :position, Vec3d(5, 0, 0), 1.0)
+b = tween!(eid, :position, Vec3d(5, 5, 0), 1.0)
+c = tween!(eid, :position, Vec3d(0, 0, 0), 1.0)
+tween_sequence!([a, b, c])
+```
+
+Available easings: `ease_linear`, `ease_in/out/in_out_quad`, `ease_in/out/in_out_cubic`, `ease_in/out/in_out_sine`, `ease_in/out_expo`, `ease_in/out_back`, `ease_in/out_bounce`, `ease_in/out_elastic`.
+
+---
+
+## Tutorial 17: Behavior Trees
+
+Build composable AI with behavior trees. Each entity gets a per-entity blackboard for shared state.
+
+```julia
+using OpenReality
+
+tree = bt_selector(
+    bt_sequence(
+        bt_condition((eid, bb) -> bb_get(bb, :player_distance, Inf) < 10.0),
+        bt_move_to(:player_pos; speed=5.0),
+        bt_action((eid, bb, dt) -> begin
+            apply_damage!(bb_get(bb, :player_eid), 10.0; damage_type=DAMAGE_PHYSICAL)
+            return BT_SUCCESS
+        end)
+    ),
+    bt_sequence(
+        bt_move_to(:patrol_target; speed=3.0),
+        bt_wait(2.0)
+    )
+)
+
+# Attach to entity
+entity([
+    cube_mesh(),
+    MaterialComponent(color=RGB{Float32}(0.8, 0.2, 0.2)),
+    transform(position=Vec3d(5, 0.5, 0)),
+    BehaviorTreeComponent(tree)
+])
+```
+
+---
+
+## Tutorial 18: Health & Damage
+
+Add HP, armor, and typed damage resistances to entities.
+
+```julia
+using OpenReality
+
+entity([
+    cube_mesh(),
+    MaterialComponent(color=RGB{Float32}(0.9, 0.1, 0.1)),
+    transform(),
+    HealthComponent(
+        max_hp=100.0f0,
+        armor=10.0f0,
+        resistances=Dict(DAMAGE_FIRE => 0.5f0),
+        auto_despawn=true
+    )
+])
+
+# Apply damage (respects armor + resistances)
+apply_damage!(target, 25.0; damage_type=DAMAGE_FIRE, knockback=Vec3d(0, 2, -5))
+
+# Heal
+heal!(target, 30.0)
+
+# Listen for death events
+subscribe!(DeathEvent, event -> begin
+    @info "Entity $(event.entity) died"
+end)
+```
+
+---
+
+## Tutorial 19: Inventory & Items
+
+Register item definitions and place pickups in the world.
+
+```julia
+using OpenReality
+
+register_item!(ItemDef(
+    id=:health_potion,
+    name="Health Potion",
+    item_type=ITEM_CONSUMABLE,
+    stackable=true, max_stack=10,
+    on_use=(eid) -> heal!(eid, 30.0)
+))
+
+# Entity with inventory
+entity([
+    transform(),
+    cube_mesh(),
+    MaterialComponent(),
+    InventoryComponent(max_slots=20, max_weight=50.0f0)
+])
+
+# World pickup
+entity([
+    sphere_mesh(radius=0.2f0),
+    MaterialComponent(color=RGB{Float32}(0.9, 0.1, 0.1)),
+    transform(position=Vec3d(5, 0.5, 0)),
+    PickupComponent(:health_potion; count=1, auto_pickup_radius=1.5f0)
+])
+```
+
+---
+
+## Tutorial 20: Quests & Objectives
+
+Define quests with typed objectives and automatic event-driven tracking.
+
+```julia
+using OpenReality
+
+register_quest!(QuestDef(
+    id=:goblin_slayer,
+    name="Goblin Slayer",
+    description="Defeat 5 goblins",
+    objectives=[ObjectiveDef(description="Kill goblins", type=OBJ_KILL, required=5)]
+))
+
+start_quest!(:goblin_slayer)
+
+# Auto-track kills via EventBus
+subscribe!(DeathEvent, event -> begin
+    if is_quest_active(:goblin_slayer)
+        advance_objective!(:goblin_slayer, 1)
+    end
+end)
+
+# Check completion
+is_quest_completed(:goblin_slayer)
+```
+
+---
+
+## Tutorial 21: Dialogue System
+
+Build branching NPC dialogue with per-choice conditions and quest integration.
+
+```julia
+using OpenReality
+
+tree = DialogueTree(:elder, [
+    DialogueNode(id=:start, speaker="Elder",
+        text="Welcome! Will you help us?",
+        choices=[
+            DialogueChoice("I'll help!", :accept),
+            DialogueChoice("Not now.", :decline)
+        ]
+    ),
+    DialogueNode(id=:accept, speaker="Elder",
+        text="Defeat the goblins in the east.",
+        choices=[],
+        on_enter=() -> start_quest!(:goblin_slayer)
+    ),
+    DialogueNode(id=:decline, speaker="Elder",
+        text="Come back when you're ready.",
+        choices=[]
+    )
+])
+
+start_dialogue!(tree)
+# Engine handles input + UI rendering automatically
+```
+
+---
+
+## Tutorial 22: Game Config & Debug Console
+
+Use the config system for tunable values and the debug console for development.
+
+```julia
+using OpenReality
+
+# Config
+set_config!("player.max_hp", 100.0)
+register_difficulty!(:easy, Dict("player.max_hp" => 150.0, "enemy.speed" => 3.0))
+apply_difficulty!(:easy)
+
+hp = get_config(Float64, "player.max_hp"; default=100.0)
+
+# Debug console (toggle with backtick key in-game)
+register_command!("heal", args -> begin
+    heal!(player_eid[], parse(Float32, args[1]))
+    return "Healed $(args[1]) HP"
+end; help="heal <amount>")
+
+watch!("FPS", () -> round(1.0 / dt[]))
+watch!("Player HP", () -> get_hp(player_eid[]))
 ```

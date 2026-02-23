@@ -39,6 +39,11 @@ const features = [
     description: 'OpenAL backend with AudioListener and AudioSource components. Spatial attenuation built in.',
   },
   {
+    tag: 'RPG',
+    title: 'Gameplay Toolkit',
+    description: 'FSM, events, timers, coroutines, tweens, behavior trees, health/damage, inventory, quests, dialogue, and debug console.',
+  },
+  {
     tag: 'WEB',
     title: 'WASM Export',
     description: 'Export scenes to .orsb binary format. Run in browsers via the WebGPU runtime.',

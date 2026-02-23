@@ -7,11 +7,15 @@ useSeoMeta({
   ogDescription: 'Install OpenReality, create your first scene, and render it with Julia. Prerequisites, setup guide, and first project walkthrough.',
 })
 
-const installCode = `# Clone the repository
+const installBash = `# One-line install (Linux / macOS)
+curl -fsSL https://open-reality.com/install.sh | sh`
+
+const installPowershell = `# One-line install (Windows PowerShell)
+irm https://open-reality.com/install.ps1 | iex`
+
+const installSource = `# Or build from source
 git clone https://github.com/sinisterMage/Open-Reality.git
 cd OpenReality
-
-# Install Julia dependencies
 julia --project=. -e 'using Pkg; Pkg.instantiate()'`
 
 const helloCode = `using OpenReality
@@ -45,6 +49,8 @@ render(s)`
 const testCode = `julia --project=. -e 'using Pkg; Pkg.test()'`
 
 const runCode = `julia --project=. examples/hello_cube.jl`
+
+const activeTab = ref<'unix' | 'windows'>('unix')
 </script>
 
 <template>
@@ -82,7 +88,49 @@ const runCode = `julia --project=. examples/hello_cube.jl`
       <h2 class="text-xl font-mono font-bold text-or-text mb-4">
         <span class="text-or-green">#</span> Installation
       </h2>
-      <CodeBlock :code="installCode" lang="bash" filename="terminal" />
+      <p class="text-or-text-dim mb-4 leading-relaxed">
+        Install with a single command:
+      </p>
+      <div class="flex gap-2 mb-4">
+        <button
+          class="px-4 py-2 font-mono text-sm rounded-t border border-or-border transition-colors"
+          :class="activeTab === 'unix'
+            ? 'bg-or-panel text-or-green border-b-transparent'
+            : 'bg-or-surface text-or-text-dim hover:text-or-text'"
+          @click="activeTab = 'unix'"
+        >
+          Linux / macOS
+        </button>
+        <button
+          class="px-4 py-2 font-mono text-sm rounded-t border border-or-border transition-colors"
+          :class="activeTab === 'windows'
+            ? 'bg-or-panel text-or-green border-b-transparent'
+            : 'bg-or-surface text-or-text-dim hover:text-or-text'"
+          @click="activeTab = 'windows'"
+        >
+          Windows
+        </button>
+      </div>
+      <CodeBlock
+        v-if="activeTab === 'unix'"
+        :code="installBash"
+        lang="bash"
+        filename="terminal"
+      />
+      <CodeBlock
+        v-else
+        :code="installPowershell"
+        lang="powershell"
+        filename="powershell"
+      />
+      <details class="mt-4 group">
+        <summary class="cursor-pointer font-mono text-sm text-or-text-dim hover:text-or-text transition-colors">
+          Build from source
+        </summary>
+        <div class="mt-3">
+          <CodeBlock :code="installSource" lang="bash" filename="terminal" />
+        </div>
+      </details>
     </section>
 
     <!-- First scene -->
@@ -131,17 +179,17 @@ const runCode = `julia --project=. examples/hello_cube.jl`
           <h4 class="font-mono font-bold text-or-text">Architecture</h4>
           <p class="text-or-text-dim text-sm mt-1">Learn about the ECS, scene graph, and rendering pipeline.</p>
         </NuxtLink>
+        <NuxtLink to="/docs/gameplay" class="block p-4 rounded-lg border border-or-border bg-or-surface hover:border-or-green/50 transition-colors">
+          <h4 class="font-mono font-bold text-or-text">Gameplay Systems</h4>
+          <p class="text-or-text-dim text-sm mt-1">FSM, events, timers, tweens, behavior trees, health, quests, and more.</p>
+        </NuxtLink>
         <NuxtLink to="/docs/components" class="block p-4 rounded-lg border border-or-border bg-or-surface hover:border-or-green/50 transition-colors">
           <h4 class="font-mono font-bold text-or-text">Components</h4>
-          <p class="text-or-text-dim text-sm mt-1">Explore the 16+ built-in component types.</p>
+          <p class="text-or-text-dim text-sm mt-1">Explore the 20+ built-in component types.</p>
         </NuxtLink>
         <NuxtLink to="/docs/physics" class="block p-4 rounded-lg border border-or-border bg-or-surface hover:border-or-green/50 transition-colors">
           <h4 class="font-mono font-bold text-or-text">Physics</h4>
           <p class="text-or-text-dim text-sm mt-1">Add rigid body dynamics and collision detection.</p>
-        </NuxtLink>
-        <NuxtLink to="/docs/rendering" class="block p-4 rounded-lg border border-or-border bg-or-surface hover:border-or-green/50 transition-colors">
-          <h4 class="font-mono font-bold text-or-text">Rendering</h4>
-          <p class="text-or-text-dim text-sm mt-1">Configure PBR, shadows, and post-processing.</p>
         </NuxtLink>
       </div>
     </section>

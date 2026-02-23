@@ -3,14 +3,28 @@ definePageMeta({ layout: 'docs' })
 useSeoMeta({
   title: 'Systems Reference - OpenReality Docs',
   ogTitle: 'Systems Reference - OpenReality Docs',
-  description: 'Guide to OpenReality systems: player controller, physics simulation, animation, skeletal skinning, 3D audio, particle simulation, and UI rendering.',
-  ogDescription: 'Guide to OpenReality systems: player controller, physics simulation, animation, skeletal skinning, 3D audio, particle simulation, and UI rendering.',
+  description: 'Guide to OpenReality systems: player controller, physics, animation, skinning, audio, particles, UI, and gameplay systems (timers, coroutines, tweens, behavior trees, health, pickups).',
+  ogDescription: 'Guide to OpenReality systems: player controller, physics, animation, skinning, audio, particles, UI, and gameplay systems (timers, coroutines, tweens, behavior trees, health, pickups).',
 })
 
 const pipelineCode = `# Executed automatically each frame by render():
 clear_world_transform_cache!()        # invalidate cached matrices
 update_player!(controller, input, dt) # FPS controls
 update_camera_controllers!(scene, dt) # orbit/third-person/cinematic
+
+# Gameplay systems
+update_timers!(dt)                    # one-shot & repeating timers
+update_coroutines!(dt)                # cooperative coroutines
+update_tweens!(dt)                    # property animation
+update_behavior_trees!(dt)            # AI behavior trees
+update_health_system!(ctx)            # damage/death processing
+update_pickups!(dt, ctx)              # auto-collection in radius
+
+# Dialogue & debug console input
+update_dialogue_input!(input)         # branching dialogue
+update_debug_console!(input, dt)      # in-game console
+
+# Core engine systems
 update_animations!(dt)                # keyframe interpolation
 update_blend_trees!(dt)               # animation blend trees
 update_skinned_meshes!()              # bone matrix computation
@@ -19,7 +33,8 @@ update_collision_callbacks!()         # collision event dispatch
 update_scripts!(scene, dt, ctx)       # ScriptComponent lifecycle
 update_audio!(dt)                     # 3D audio sync
 update_particles!(dt)                 # particle emission & simulation
-render_frame!(backend, scene)         # GPU rendering`
+render_frame!(backend, scene)         # GPU rendering
+flush_deferred_events!()              # process queued events`
 
 const playerCode = `# Auto-detected when PlayerComponent exists in scene
 # Provides FPS-style controls:
@@ -83,19 +98,40 @@ update_particles!(dt)  # called automatically`
 
 const uiCode = `# Immediate-mode UI rendered as an overlay:
 render(s, ui=function(ctx::UIContext)
-    ui_text(ctx, 10, 10, "FPS: \$(round(1/dt))")
+    ui_text(ctx, "FPS: \$(round(1/dt))"; x=10, y=10, size=16)
     ui_rect(ctx, 10, 40, 200, 20, (0.2, 0.2, 0.2, 0.8))
     ui_progress_bar(ctx, 10, 40, 200, 20, health/100)
 
-    if ui_button(ctx, 10, 80, 120, 30, "Restart")
+    if ui_button(ctx, "Restart"; x=10, y=80, width=120, height=30)
         reset_game!()
     end
 
     ui_image(ctx, 10, 120, 64, 64, "icon.png")
 end)`
 
+const gameplayCode = `# The FSM render loop runs these gameplay systems each frame
+# (in addition to core engine systems above):
+
+update_timers!(dt)             # fire one-shot & interval callbacks
+update_coroutines!(dt)         # resume suspended coroutines
+update_tweens!(dt)             # interpolate entity properties
+update_behavior_trees!(dt)     # tick all BehaviorTreeComponents
+update_health_system!(ctx)     # process deaths, auto-despawn
+update_pickups!(dt, ctx)       # collect items within radius
+
+# Input-driven systems:
+update_dialogue_input!(input)  # advance dialogue, select choices
+update_debug_console!(input, dt)  # toggle console, execute commands
+
+# Config hot-reload:
+check_config_reload!()         # reload TOML if file changed
+
+# Deferred events:
+flush_deferred_events!()       # dispatch all queued events`
+
 const systems = [
-  { id: 'pipeline', title: 'Systems Pipeline', code: pipelineCode, desc: 'The render loop executes systems in a fixed order each frame. Delta time is computed automatically.' },
+  { id: 'pipeline', title: 'Systems Pipeline', code: pipelineCode, desc: 'The render loop executes systems in a fixed order each frame. Delta time is computed automatically. Gameplay systems run before core engine systems.' },
+  { id: 'gameplay', title: 'Gameplay Systems', code: gameplayCode, desc: 'The FSM render loop integrates all gameplay subsystems automatically. Timers, coroutines, tweens, behavior trees, health, pickups, dialogue, and debug console all update each frame without manual wiring.' },
   { id: 'player', title: 'Player Controller', code: playerCode, desc: 'FPS-style input handling. Automatically activated when a PlayerComponent is detected in the scene. Captures the cursor and provides WASD movement with mouse look.' },
   { id: 'physics', title: 'Physics System', code: physicsCode, desc: 'Fixed-timestep physics simulation with sub-stepping. The PhysicsWorld singleton manages broadphase, narrowphase, constraint solving, and sleeping.' },
   { id: 'animation', title: 'Animation System', code: animationCode, desc: 'Keyframe interpolation supporting three modes. Animations from glTF files are automatically loaded with correct interpolation types and target remapping.' },
@@ -113,6 +149,8 @@ const systems = [
       <p class="text-or-text-dim mt-3 leading-relaxed">
         Systems run each frame to update game state. They operate on components
         in the ECS store and are executed in a fixed order by the render loop.
+        The FSM render loop adds gameplay systems (timers, coroutines, tweens, behavior trees,
+        health, pickups, dialogue, debug console) on top of the core engine systems.
       </p>
     </div>
 

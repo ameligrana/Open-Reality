@@ -1004,7 +1004,7 @@ spawn!(ctx, coin_prefab, position=Vec3d(10, 1, 0))
 
 ---
 
-## Event Bus
+## Event Bus (Enhanced)
 
 ```julia
 # Define a custom event
@@ -1013,13 +1013,235 @@ struct CoinCollected <: GameEvent
     value::Int
 end
 
-# Subscribe to events
-subscribe!(CoinCollected) do event
+# Subscribe with priority (lower = called first)
+subscribe!(CoinCollected, event -> begin
     println("Collected coin worth $(event.value)!")
-end
+end; priority=10)
 
-# Emit from game logic
+# One-shot listener
+subscribe_once!(CoinCollected, event -> begin
+    println("First coin!")
+end)
+
+# Listener with filter and cancellation
+subscribe!(CoinCollected, (event, ctx) -> begin
+    if event.value > 100
+        ctx.cancelled = true  # stop propagation
+    end
+end; priority=1)
+
+# Emit immediately or defer to end of frame
 emit!(CoinCollected(some_entity_id, 10))
+emit_deferred!(CoinCollected(some_entity_id, 50))
+```
+
+---
+
+## Game Config & Difficulty Presets
+
+```julia
+# Set config values
+set_config!("player.max_hp", 100.0)
+set_config!("enemy.speed", 5.0)
+
+# Register difficulty presets
+register_difficulty!(:easy, Dict("player.max_hp" => 150.0, "enemy.speed" => 3.0))
+register_difficulty!(:hard, Dict("player.max_hp" => 75.0, "enemy.speed" => 8.0))
+
+# Apply a preset
+apply_difficulty!(:easy)
+
+# Retrieve typed config
+hp = get_config(Float64, "player.max_hp"; default=100.0)
+
+# Hot-reload from TOML file
+load_config_from_file!("config/game.toml")
+```
+
+---
+
+## Timers
+
+```julia
+# One-shot timer
+timer_once!(3.0, () -> @info "3 seconds passed!")
+
+# Repeating timer (5 times, every second)
+timer_interval!(1.0, () -> @info "Tick!"; repeats=5)
+
+# Entity-scoped (auto-cancels when entity despawns)
+timer_once!(2.0, () -> explode!(eid); owner=eid)
+
+# Pause / resume / cancel
+pause_timer!(id)
+resume_timer!(id)
+cancel_timer!(id)
+```
+
+---
+
+## Coroutines
+
+```julia
+# Sequential multi-frame logic
+start_coroutine!(; owner=player_eid) do ctx
+    yield_wait(ctx, 1.0)
+    @info "1 second"
+    yield_frames(ctx, 60)
+    @info "60 frames"
+    yield_until(ctx, () -> is_quest_completed(:rescue))
+    @info "Quest done!"
+end
+```
+
+---
+
+## Tweens & Easing
+
+```julia
+# Animate position with cubic easing
+tween!(eid, :position, Vec3d(10, 5, 0), 2.0; easing=ease_in_out_cubic)
+
+# Ping-pong scale loop
+tween!(eid, :scale, Vec3d(1.5, 1.5, 1.5), 0.8;
+       easing=ease_in_out_sine,
+       loop_mode=TWEEN_PING_PONG, loop_count=-1)
+
+# Chain a movement sequence
+a = tween!(eid, :position, Vec3d(5, 0, 0), 1.0)
+b = tween!(eid, :position, Vec3d(5, 5, 0), 1.0)
+c = tween!(eid, :position, Vec3d(0, 0, 0), 1.0)
+tween_sequence!([a, b, c])
+```
+
+---
+
+## Behavior Tree AI
+
+```julia
+tree = bt_selector(
+    # Chase + attack if player nearby
+    bt_sequence(
+        bt_condition((eid, bb) -> bb_get(bb, :player_distance, Inf) < 10.0),
+        bt_move_to(:player_pos; speed=5.0),
+        bt_action((eid, bb, dt) -> begin
+            apply_damage!(bb_get(bb, :player_eid), 10.0; damage_type=DAMAGE_PHYSICAL)
+            return BT_SUCCESS
+        end)
+    ),
+    # Otherwise patrol
+    bt_sequence(
+        bt_move_to(:patrol_target; speed=3.0),
+        bt_wait(2.0)
+    )
+)
+
+entity([..., BehaviorTreeComponent(tree)])
+```
+
+---
+
+## Health & Damage
+
+```julia
+entity([
+    ...,
+    HealthComponent(
+        max_hp=100.0f0,
+        armor=10.0f0,
+        resistances=Dict(DAMAGE_FIRE => 0.5f0),
+        auto_despawn=true
+    )
+])
+
+# Apply damage (respects armor + resistances)
+apply_damage!(target, 25.0; damage_type=DAMAGE_FIRE, knockback=Vec3d(0, 2, -5))
+heal!(target, 30.0)
+
+# React to deaths
+subscribe!(DeathEvent, event -> @info "$(event.entity) died")
+```
+
+---
+
+## Inventory & Items
+
+```julia
+register_item!(ItemDef(
+    id=:health_potion, name="Health Potion",
+    item_type=ITEM_CONSUMABLE, stackable=true, max_stack=10,
+    on_use=(eid) -> heal!(eid, 30.0)
+))
+
+# Entity with inventory
+entity([..., InventoryComponent(max_slots=20)])
+
+# World pickup (auto-collected within radius)
+entity([
+    sphere_mesh(radius=0.2f0),
+    MaterialComponent(color=RGB{Float32}(0.9, 0.1, 0.1)),
+    transform(position=Vec3d(5, 0.5, 0)),
+    PickupComponent(:health_potion; count=1, auto_pickup_radius=1.5f0)
+])
+```
+
+---
+
+## Quests & Objectives
+
+```julia
+register_quest!(QuestDef(
+    id=:goblin_slayer, name="Goblin Slayer",
+    description="Defeat 5 goblins",
+    objectives=[ObjectiveDef(description="Kill goblins", type=OBJ_KILL, required=5)]
+))
+
+start_quest!(:goblin_slayer)
+
+subscribe!(DeathEvent, event -> begin
+    is_quest_active(:goblin_slayer) && advance_objective!(:goblin_slayer, 1)
+end)
+```
+
+---
+
+## Dialogue
+
+```julia
+tree = DialogueTree(:elder, [
+    DialogueNode(id=:start, speaker="Elder",
+        text="Will you help us?",
+        choices=[
+            DialogueChoice("Yes!", :accept),
+            DialogueChoice("No.", :decline)
+        ]),
+    DialogueNode(id=:accept, speaker="Elder",
+        text="Defeat the goblins!",
+        choices=[],
+        on_enter=() -> start_quest!(:goblin_slayer)),
+    DialogueNode(id=:decline, speaker="Elder",
+        text="Come back later.", choices=[])
+])
+
+start_dialogue!(tree)
+```
+
+---
+
+## Debug Console
+
+```julia
+# Custom commands
+register_command!("heal", args -> begin
+    heal!(player[], parse(Float32, args[1]))
+    return "Healed $(args[1]) HP"
+end; help="heal <amount>")
+
+# On-screen watches
+watch!("FPS", () -> round(1/dt[]))
+watch!("Player HP", () -> get_hp(player[]))
+
+# Toggle console with backtick key in-game
 ```
 
 ---

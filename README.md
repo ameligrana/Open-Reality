@@ -36,12 +36,22 @@ OpenReality provides AAA-quality rendering with a clean functional API. Define s
 - glTF 2.0 and OBJ model loading
 - Built-in FPS player controller
 - Scene export to binary ORSB format for web deployment
-- Game State Machine (FSM) with scene transitions
+- Game State Machine (FSM) with guarded transitions and history
 - GameContext for deferred entity spawning/despawning
 - ScriptComponent lifecycle (on_start, on_update, on_destroy)
 - Collision callbacks (enter, stay, exit)
 - Prefab system for reusable entity templates
-- EventBus publish-subscribe for game events
+- Enhanced EventBus: priority listeners, one-shot, deferred events, cancellation
+- Game Config with TOML loading, difficulty presets, hot-reload
+- Timers: one-shot, interval, entity-scoped auto-cancel
+- Cooperative coroutines with yield_wait, yield_frames, yield_until
+- Tweens & easing: 18 easing curves, chaining, ping-pong, loop modes
+- Behavior trees: selector, sequence, parallel, decorator nodes with blackboard
+- Health & damage: armor, typed resistances, knockback, auto-despawn
+- Inventory & items: slot-based inventory, item registry, world pickups
+- Quest & objectives: kill/collect/reach/interact/custom objectives, auto-tracking
+- Dialogue system: branching trees, per-choice conditions, quest integration
+- Debug console: in-game terminal, custom commands, on-screen watches
 - Camera controllers: third-person, orbit, cinematic
 - Input mapping with gamepad support
 - Animation blend trees (1D and 2D blending)
@@ -62,17 +72,26 @@ OpenReality provides AAA-quality rendering with a clean functional API. Define s
 
 ## Quick Start
 
-### Prerequisites
-
-- **Julia 1.9+** — [julialang.org](https://julialang.org/downloads/)
-- **GLFW** — `sudo apt install libglfw3 libglfw3-dev` (Ubuntu) / `brew install glfw` (macOS)
-- **Vulkan SDK** (optional) — [lunarg.com](https://vulkan.lunarg.com/sdk/home)
-
 ### Install
 
-```julia
-using Pkg
-Pkg.develop(path="/path/to/OpenReality")
+**One-liner (recommended):**
+
+```bash
+# Linux / macOS
+curl -fsSL https://open-reality.com/install.sh | sh
+
+# Windows PowerShell
+irm https://open-reality.com/install.ps1 | iex
+```
+
+**Or build from source:**
+
+Prerequisites: **Julia 1.9+** ([julialang.org](https://julialang.org/downloads/)), **GLFW** (`sudo apt install libglfw3 libglfw3-dev` on Ubuntu / `brew install glfw` on macOS), optionally **Vulkan SDK** ([lunarg.com](https://vulkan.lunarg.com/sdk/home)).
+
+```bash
+git clone https://github.com/sinisterMage/Open-Reality.git
+cd OpenReality
+julia --project=. -e 'using Pkg; Pkg.instantiate()'
 ```
 
 ### Hello World

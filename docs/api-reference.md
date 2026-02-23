@@ -1208,13 +1208,275 @@ Reusable entity templates. The factory function receives keyword arguments and r
 ```julia
 abstract type GameEvent end
 
-subscribe!(::Type{T}, callback::Function) where T <: GameEvent
-emit!(event::T) where T <: GameEvent
-unsubscribe!(::Type{T}, callback::Function) where T <: GameEvent
+# Subscribe with priority (lower = called first), filter, and one-shot
+subscribe!(::Type{T}, callback::Function;
+           priority::Int=100,
+           filter::Union{Function, Nothing}=nothing,
+           one_shot::Bool=false) -> EventListener
+
+# One-shot convenience
+subscribe_once!(::Type{T}, callback::Function; priority=100, filter=nothing) -> EventListener
+
+# Unsubscribe by callback or listener handle
+unsubscribe!(::Type{T}, callback::Function)
+unsubscribe!(listener::EventListener)
+
+# Emit immediately or defer to end-of-frame
+emit!(event::T) -> Bool  # returns !cancelled
+emit_deferred!(event::T)
+flush_deferred_events!()
+
 reset_event_bus!()
 ```
 
-Publish-subscribe system for decoupled game events.
+Callbacks can accept `(event)` or `(event, context::EventContext)`. Set `context.cancelled = true` to stop propagation.
+
+---
+
+## Game Config
+
+```julia
+set_config!(key::String, value)
+get_config(::Type{T}, key::String; default=T) -> T
+get_config(key::String; default=nothing) -> Any
+load_config!(dict::Dict)
+load_config_from_file!(path::String)
+check_config_reload!() -> Bool
+
+# Difficulty presets
+register_difficulty!(name::Symbol, overrides::Dict)
+apply_difficulty!(name::Symbol) -> Bool
+get_active_difficulty() -> Union{Symbol, Nothing}
+```
+
+Global key-value config store with TOML loading and hot-reload.
+
+---
+
+## Timers
+
+```julia
+timer_once!(delay, callback; owner=nothing) -> TimerID
+timer_interval!(interval, callback; repeats=-1, owner=nothing) -> TimerID
+cancel_timer!(id::TimerID)
+pause_timer!(id::TimerID)
+resume_timer!(id::TimerID)
+cancel_entity_timers!(entity_id::EntityID)
+update_timers!(dt::Float64)
+```
+
+Entity-scoped timers auto-cancel when the owning entity is despawned.
+
+---
+
+## Coroutines
+
+```julia
+start_coroutine!(f::Function; owner=nothing) -> CoroutineID
+cancel_coroutine!(id::CoroutineID)
+cancel_entity_coroutines!(entity_id::EntityID)
+
+# Yield functions (called inside coroutine body)
+yield_wait(ctx::CoroutineContext, seconds::Real)
+yield_frames(ctx::CoroutineContext, n::Int)
+yield_until(ctx::CoroutineContext, condition::Function)
+
+update_coroutines!(dt::Float64)
+```
+
+Cooperative coroutines for sequential logic spanning multiple frames. Status: `CO_RUNNING`, `CO_SUSPENDED`, `CO_COMPLETED`, `CO_CANCELLED`.
+
+---
+
+## Tweens & Easing
+
+```julia
+tween!(entity, property, target, duration;
+       easing=ease_linear,
+       loop_mode=TWEEN_ONCE,  # TWEEN_LOOP, TWEEN_PING_PONG
+       loop_count=0,          # -1 for infinite
+       on_complete=nothing) -> TweenID
+
+then!(first_id, next_id) -> TweenID
+tween_sequence!(ids::Vector{TweenID}) -> TweenID
+
+cancel_tween!(id::TweenID)
+pause_tween!(id::TweenID)
+resume_tween!(id::TweenID)
+cancel_entity_tweens!(entity::EntityID)
+update_tweens!(dt::Float64)
+```
+
+Properties: `:position`, `:scale`, `:rotation`, `:color`, `:opacity`.
+
+Easing functions: `ease_linear`, `ease_in/out/in_out_quad`, `ease_in/out/in_out_cubic`, `ease_in/out/in_out_sine`, `ease_in/out_expo`, `ease_in/out_back`, `ease_in/out_bounce`, `ease_in/out_elastic`.
+
+---
+
+## Behavior Trees
+
+```julia
+# Node builders
+bt_selector(children...)   -> SelectorNode
+bt_sequence(children...)   -> SequenceNode
+bt_parallel(children...; threshold=0) -> ParallelNode
+bt_action(f::Function)     -> ActionNode     # (eid, bb, dt) -> BTStatus
+bt_condition(f::Function)  -> ConditionNode  # (eid, bb) -> Bool
+bt_invert(child)           -> InverterNode
+bt_repeat(child; count=-1) -> RepeatNode
+bt_succeed(child)          -> SucceederNode
+bt_timeout(child, seconds) -> TimeoutNode
+
+# Blackboard (per-entity key-value store)
+bb_get(bb, key::Symbol, default=nothing)
+bb_set!(bb, key::Symbol, value)
+bb_has(bb, key::Symbol) -> Bool
+bb_delete!(bb, key::Symbol)
+
+# Built-in helpers
+bt_move_to(target_key; speed=5.0, arrival_distance=0.5)
+bt_wait(seconds)
+bt_set_bb(key, value)
+bt_has_bb(key)
+
+# Component
+BehaviorTreeComponent(root::BTNode)
+
+update_behavior_trees!(dt::Float64)
+```
+
+Status: `BT_SUCCESS`, `BT_FAILURE`, `BT_RUNNING`.
+
+---
+
+## Health & Damage
+
+```julia
+HealthComponent(;
+    max_hp=100.0f0,
+    armor=0.0f0,
+    resistances=Dict{DamageType,Float32}(),
+    invincible=false,
+    auto_despawn=false,
+    on_damage=nothing,  # (entity, amount, type) -> nothing
+    on_death=nothing    # (entity) -> nothing
+)
+
+apply_damage!(target, amount;
+              source=nothing,
+              damage_type=DAMAGE_PHYSICAL,
+              knockback=Vec3d(0,0,0))
+heal!(target, amount; source=nothing)
+is_dead(entity) -> Bool
+get_hp(entity) -> (current, max)
+
+update_health_system!(ctx::GameContext)
+```
+
+Damage types: `DAMAGE_PHYSICAL`, `DAMAGE_FIRE`, `DAMAGE_ICE`, `DAMAGE_ELECTRIC`, `DAMAGE_MAGIC`, `DAMAGE_TRUE`.
+
+Events: `DamageEvent`, `HealEvent`, `DeathEvent`.
+
+---
+
+## Inventory & Items
+
+```julia
+# Item definition
+ItemDef(;
+    id::Symbol, name::String, description="", icon_path="",
+    stackable=true, max_stack=99, weight=0.0f0,
+    item_type=ITEM_CONSUMABLE,  # ITEM_EQUIPMENT, ITEM_MATERIAL, ITEM_KEY, ITEM_QUEST
+    on_use=nothing,             # (entity_id) -> nothing
+    metadata=Dict{Symbol,Any}()
+)
+
+register_item!(def::ItemDef)
+get_item_def(id::Symbol) -> Union{ItemDef, Nothing}
+
+# Components
+InventoryComponent(; max_slots=10, max_weight=Inf32)
+PickupComponent(item_id::Symbol; count=1, auto_pickup_radius=1.5f0)
+
+update_pickups!(dt::Float64, ctx::GameContext)
+```
+
+Events: `ItemPickedUpEvent`, `ItemUsedEvent`, `ItemDroppedEvent`.
+
+---
+
+## Quests & Objectives
+
+```julia
+ObjectiveDef(;
+    description::String,
+    type=OBJ_KILL,  # OBJ_COLLECT, OBJ_REACH_LOCATION, OBJ_INTERACT, OBJ_CUSTOM
+    required::Int=1
+)
+
+QuestDef(;
+    id::Symbol, name::String, description="",
+    objectives::Vector{ObjectiveDef}=[]
+)
+
+register_quest!(def::QuestDef)
+start_quest!(quest_id::Symbol) -> Bool
+advance_objective!(quest_id, objective_index; amount=1)
+complete_quest!(quest_id)
+fail_quest!(quest_id)
+is_quest_active(quest_id) -> Bool
+is_quest_completed(quest_id) -> Bool
+get_quest_progress(quest_id) -> Union{ActiveQuest, Nothing}
+get_active_quest_ids() -> Vector{Symbol}
+```
+
+Events: `QuestStartedEvent`, `ObjectiveProgressEvent`, `QuestCompletedEvent`, `QuestFailedEvent`.
+
+---
+
+## Dialogue System
+
+```julia
+DialogueChoice(text, next_node_id;
+               condition=nothing,   # () -> Bool
+               on_select=nothing)   # () -> nothing
+
+DialogueNode(;
+    id::Symbol, speaker::String, text::String,
+    choices::Vector{DialogueChoice}=[],
+    on_enter=nothing,               # () -> nothing
+    auto_advance=nothing            # ::Symbol next node
+)
+
+DialogueTree(id::Symbol, nodes::Vector{DialogueNode})
+
+start_dialogue!(tree; id=:dialogue)
+select_choice!(index::Int)
+advance!()
+end_dialogue!()
+is_dialogue_active() -> Bool
+get_current_dialogue_node() -> Union{DialogueNode, Nothing}
+get_available_choices() -> Vector{DialogueChoice}
+update_dialogue_input!(input) -> Bool
+render_dialogue!(ui_ctx)
+```
+
+Events: `DialogueStartedEvent`, `DialogueChoiceEvent`, `DialogueEndedEvent`.
+
+---
+
+## Debug Console
+
+```julia
+register_command!(name, handler; help="")  # handler(args::Vector{String}) -> String
+execute_command!(input::String) -> String
+watch!(name::String, getter::Function)
+unwatch!(name::String)
+update_debug_console!(input, dt) -> Bool
+render_debug_console!(ui_ctx)
+```
+
+Toggle with backtick key. Built-in commands: `help`, `inspect`, `entities`, `components`, `fps`, `set`, `get`, `clear`.
 
 ---
 
