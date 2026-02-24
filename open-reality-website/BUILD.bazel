@@ -1,0 +1,34 @@
+load("//bazel:bun.bzl", "bun_test")
+
+bun_test(
+    name = "website_tests",
+    package_json = "package.json",
+    srcs = glob([
+        "app/**/*",
+        "__tests__/**/*",
+        "stories/**/*",
+        "bunfig.toml",
+        "tsconfig.json",
+    ]),
+    tags = [
+        "no-sandbox",
+        "local",
+    ],
+)
+
+bun_test(
+    name = "storybook_build",
+    package_json = "package.json",
+    command = "run build-storybook",
+    srcs = glob([
+        "app/**/*",
+        "stories/**/*",
+        ".storybook/**/*",
+        "tsconfig.json",
+    ]),
+    tags = [
+        "no-sandbox",
+        "local",
+        "manual",
+    ],
+)
