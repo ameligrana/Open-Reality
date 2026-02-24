@@ -226,3 +226,69 @@ pub struct MotionBlurParams {
     pub _pad1: f32,
     pub _pad2: f32,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::mem::size_of;
+
+    #[test]
+    fn test_per_frame_uniforms_size() {
+        // 3 mat4x4 (3*64=192) + camera_pos (16) + time+pad (16) + alignment_pad (32) = 256
+        assert_eq!(size_of::<PerFrameUniforms>(), 256);
+    }
+
+    #[test]
+    fn test_bone_uniforms_size() {
+        // 16 bytes header + 128 * 64 bytes = 8208
+        assert_eq!(size_of::<BoneUniforms>(), 8208);
+    }
+
+    #[test]
+    fn test_per_object_uniforms_size() {
+        // model (64) + 3 normal cols (48) + pad (16) = 128
+        assert_eq!(size_of::<PerObjectUniforms>(), 128);
+    }
+
+    #[test]
+    fn test_point_light_data_size() {
+        // position (16) + color (16) + intensity+range+pad (16) = 48
+        assert_eq!(size_of::<PointLightData>(), 48);
+    }
+
+    #[test]
+    fn test_dir_light_data_size() {
+        // direction (16) + color (16) + intensity+pads (16) = 48
+        assert_eq!(size_of::<DirLightData>(), 48);
+    }
+
+    #[test]
+    fn test_light_uniforms_size() {
+        // 16 point lights * 48 + 4 dir lights * 48 + 16 bytes header = 976
+        assert_eq!(size_of::<LightUniforms>(), 16 * 48 + 4 * 48 + 16);
+    }
+
+    #[test]
+    fn test_shadow_uniforms_size() {
+        // 4 cascades * 80 + 16 header = 336
+        assert_eq!(size_of::<CascadeData>(), 80);
+        assert_eq!(size_of::<ShadowUniforms>(), 4 * 80 + 16);
+    }
+
+    #[test]
+    fn test_pod_zeroable_roundtrip() {
+        let uniform: PerFrameUniforms = Zeroable::zeroed();
+        let bytes = bytemuck::bytes_of(&uniform);
+        assert!(bytes.iter().all(|&b| b == 0), "Zeroed uniform should be all-zero bytes");
+    }
+
+    #[test]
+    fn test_material_uniforms_pod() {
+        let mut mat: MaterialUniforms = Zeroable::zeroed();
+        mat.metallic = 1.0;
+        mat.roughness = 0.5;
+        let bytes = bytemuck::bytes_of(&mat);
+        // Should not be all-zero anymore
+        assert!(bytes.iter().any(|&b| b != 0));
+    }
+}

@@ -33,6 +33,10 @@ julia_test(
         "@platforms//os:macos": ["//metal_bridge:MetalBridge"],
         "//conditions:default": [],
     }),
+    tags = [
+        "no-sandbox",
+        "local",
+    ],
 )
 
 # ============================================================
@@ -47,4 +51,5 @@ alias(
 alias(
     name = "wasm",
     actual = "//openreality-web:openreality_web_pkg",
+    tags = ["manual"],
 )

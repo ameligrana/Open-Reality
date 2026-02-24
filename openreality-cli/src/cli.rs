@@ -199,3 +199,81 @@ impl MobilePlatform {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[test]
+    fn test_cli_no_args() {
+        let cli = Cli::try_parse_from(["orcli"]).unwrap();
+        assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn test_cli_init() {
+        let cli = Cli::try_parse_from(["orcli", "init", "myproject"]).unwrap();
+        match cli.command.unwrap() {
+            Command::Init { name, engine_dev, .. } => {
+                assert_eq!(name, "myproject");
+                assert!(!engine_dev);
+            }
+            _ => panic!("Expected Init command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_init_engine_dev() {
+        let cli = Cli::try_parse_from(["orcli", "init", "myproject", "--engine-dev"]).unwrap();
+        match cli.command.unwrap() {
+            Command::Init { engine_dev, .. } => assert!(engine_dev),
+            _ => panic!("Expected Init command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_run() {
+        let cli = Cli::try_parse_from(["orcli", "run", "scene.jl"]).unwrap();
+        match cli.command.unwrap() {
+            Command::Run { file } => assert_eq!(file, "scene.jl"),
+            _ => panic!("Expected Run command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_build_backend() {
+        let cli = Cli::try_parse_from(["orcli", "build", "backend", "metal"]).unwrap();
+        match cli.command.unwrap() {
+            Command::Build { target: BuildTarget::Backend { name } } => {
+                assert_eq!(name, "metal");
+            }
+            _ => panic!("Expected Build Backend command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_export() {
+        let cli = Cli::try_parse_from([
+            "orcli", "export", "scene.jl", "-o", "out.orsb",
+        ]).unwrap();
+        match cli.command.unwrap() {
+            Command::Export { scene, output, .. } => {
+                assert_eq!(scene, "scene.jl");
+                assert_eq!(output, PathBuf::from("out.orsb"));
+            }
+            _ => panic!("Expected Export command"),
+        }
+    }
+
+    #[test]
+    fn test_cli_test() {
+        let cli = Cli::try_parse_from(["orcli", "test"]).unwrap();
+        assert!(matches!(cli.command.unwrap(), Command::Test));
+    }
+
+    #[test]
+    fn test_cli_invalid_subcommand() {
+        assert!(Cli::try_parse_from(["orcli", "invalid"]).is_err());
+    }
+}

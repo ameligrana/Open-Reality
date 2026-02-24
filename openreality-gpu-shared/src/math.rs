@@ -71,3 +71,162 @@ pub fn geometry_schlick_ggx(n_dot_v: f32, roughness: f32) -> f32 {
     let k = (r * r) / 8.0;
     n_dot_v / (n_dot_v * (1.0 - k) + k)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f32::consts::PI;
+
+    const EPSILON: f32 = 1e-5;
+
+    fn approx_eq(a: f32, b: f32) -> bool {
+        (a - b).abs() < EPSILON
+    }
+
+    // ── extract_frustum_planes ──
+
+    #[test]
+    fn test_frustum_planes_normalized() {
+        let proj = Mat4::perspective_rh_gl(PI / 4.0, 16.0 / 9.0, 0.1, 100.0);
+        let planes = extract_frustum_planes(&proj);
+        for plane in &planes {
+            let len = (plane[0] * plane[0] + plane[1] * plane[1] + plane[2] * plane[2]).sqrt();
+            assert!(approx_eq(len, 1.0), "Plane normal not unit length: {len}");
+        }
+    }
+
+    #[test]
+    fn test_frustum_planes_identity() {
+        let planes = extract_frustum_planes(&Mat4::IDENTITY);
+        // Identity VP produces 6 planes; just verify we get 6 and they're valid
+        assert_eq!(planes.len(), 6);
+        for plane in &planes {
+            let len = (plane[0] * plane[0] + plane[1] * plane[1] + plane[2] * plane[2]).sqrt();
+            assert!(len > 0.0, "Degenerate plane normal");
+        }
+    }
+
+    // ── sphere_in_frustum ──
+
+    #[test]
+    fn test_sphere_inside_frustum() {
+        let proj = Mat4::perspective_rh_gl(PI / 4.0, 1.0, 0.1, 100.0);
+        let view = Mat4::look_at_rh(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO, Vec3::Y);
+        let vp = proj * view;
+        let planes = extract_frustum_planes(&vp);
+        // Origin is in front of the camera
+        assert!(sphere_in_frustum(&planes, Vec3::ZERO, 0.5));
+    }
+
+    #[test]
+    fn test_sphere_outside_frustum() {
+        let proj = Mat4::perspective_rh_gl(PI / 4.0, 1.0, 0.1, 100.0);
+        let view = Mat4::look_at_rh(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO, Vec3::Y);
+        let vp = proj * view;
+        let planes = extract_frustum_planes(&vp);
+        // Far behind the camera
+        assert!(!sphere_in_frustum(&planes, Vec3::new(0.0, 0.0, 200.0), 1.0));
+    }
+
+    #[test]
+    fn test_sphere_straddling_plane() {
+        let proj = Mat4::perspective_rh_gl(PI / 4.0, 1.0, 0.1, 100.0);
+        let view = Mat4::look_at_rh(Vec3::new(0.0, 0.0, 5.0), Vec3::ZERO, Vec3::Y);
+        let vp = proj * view;
+        let planes = extract_frustum_planes(&vp);
+        // Very far to the side but with a huge radius that reaches into the frustum
+        assert!(sphere_in_frustum(&planes, Vec3::new(50.0, 0.0, 0.0), 100.0));
+    }
+
+    // ── compute_cascade_splits ──
+
+    #[test]
+    fn test_cascade_splits_boundaries() {
+        let near = 0.1;
+        let far = 100.0;
+        let splits = compute_cascade_splits(near, far, 4, 0.5);
+        assert_eq!(splits.len(), 5); // num_cascades + 1
+        assert!(approx_eq(splits[0], near));
+        assert!(approx_eq(splits[4], far));
+    }
+
+    #[test]
+    fn test_cascade_splits_monotonic() {
+        let splits = compute_cascade_splits(0.1, 500.0, 4, 0.75);
+        for i in 1..splits.len() {
+            assert!(splits[i] > splits[i - 1], "Splits not monotonically increasing");
+        }
+    }
+
+    #[test]
+    fn test_cascade_splits_lambda_zero_linear() {
+        let near = 1.0;
+        let far = 101.0;
+        let splits = compute_cascade_splits(near, far, 4, 0.0);
+        // lambda=0 → purely linear: near + (far-near) * i/n
+        for i in 0..=4 {
+            let expected = near + (far - near) * (i as f32 / 4.0);
+            assert!(approx_eq(splits[i], expected), "splits[{i}]={} expected={expected}", splits[i]);
+        }
+    }
+
+    #[test]
+    fn test_cascade_splits_lambda_one_logarithmic() {
+        let near = 1.0;
+        let far = 100.0;
+        let splits = compute_cascade_splits(near, far, 4, 1.0);
+        // lambda=1 → purely logarithmic: near * (far/near)^(i/n)
+        for i in 0..=4 {
+            let expected = near * (far / near).powf(i as f32 / 4.0);
+            assert!(approx_eq(splits[i], expected), "splits[{i}]={} expected={expected}", splits[i]);
+        }
+    }
+
+    // ── distribution_ggx ──
+
+    #[test]
+    fn test_ggx_peak_at_aligned() {
+        // When n_dot_h=1, denom = a2, so D = a2 / (PI * a2 * a2) = 1 / (PI * a2)
+        let roughness = 0.5;
+        let a = roughness * roughness;
+        let a2 = a * a;
+        let expected = 1.0 / (PI * a2);
+        let result = distribution_ggx(1.0, roughness);
+        assert!(approx_eq(result, expected), "D(1.0, 0.5)={result} expected={expected}");
+    }
+
+    #[test]
+    fn test_ggx_non_negative() {
+        for &roughness in &[0.1, 0.25, 0.5, 0.75, 1.0] {
+            for &n_dot_h in &[0.0, 0.25, 0.5, 0.75, 1.0] {
+                assert!(distribution_ggx(n_dot_h, roughness) >= 0.0);
+            }
+        }
+    }
+
+    // ── geometry_schlick_ggx ──
+
+    #[test]
+    fn test_schlick_ggx_aligned() {
+        // When n_dot_v=1: result = 1 / (1*(1-k) + k) = 1/1 = 1.0
+        let result = geometry_schlick_ggx(1.0, 0.5);
+        assert!(approx_eq(result, 1.0), "G(1.0, 0.5)={result} expected=1.0");
+    }
+
+    #[test]
+    fn test_schlick_ggx_grazing_approaches_zero() {
+        // As n_dot_v → 0, G → 0/k = 0
+        let result = geometry_schlick_ggx(0.001, 0.5);
+        assert!(result < 0.01, "G at grazing angle should be near zero, got {result}");
+    }
+
+    #[test]
+    fn test_schlick_ggx_range() {
+        for &roughness in &[0.1, 0.5, 1.0] {
+            for &n_dot_v in &[0.0, 0.25, 0.5, 0.75, 1.0] {
+                let result = geometry_schlick_ggx(n_dot_v, roughness);
+                assert!(result >= 0.0 && result <= 1.0, "G({n_dot_v}, {roughness})={result} out of [0,1]");
+            }
+        }
+    }
+}

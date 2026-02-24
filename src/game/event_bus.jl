@@ -92,9 +92,11 @@ end
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-"""Insert listener into the list maintaining priority order (lower priority value = earlier execution)."""
+"""Insert listener into the list maintaining priority order (lower priority value = earlier execution).
+Ties are broken by insertion order (FIFO) — `searchsortedlast` places new listeners after existing ones
+with the same priority."""
 function _insert_sorted!(listeners::Vector{EventListener}, listener::EventListener)
-    idx = searchsortedfirst(listeners, listener; by=l -> l.priority)
+    idx = searchsortedlast(listeners, listener; by=l -> l.priority) + 1
     insert!(listeners, idx, listener)
     return nothing
 end

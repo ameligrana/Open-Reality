@@ -177,3 +177,201 @@ fn slerp_quat(a: DQuat, b: DQuat, t: f64) -> DQuat {
         a.w * w0 + b.w * w1,
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EPSILON: f64 = 1e-6;
+
+    fn approx_eq(a: f64, b: f64) -> bool {
+        (a - b).abs() < EPSILON
+    }
+
+    // ── find_keyframe_index ──
+
+    #[test]
+    fn test_empty_times() {
+        assert_eq!(find_keyframe_index(&[], 1.0), None);
+    }
+
+    #[test]
+    fn test_single_keyframe() {
+        let result = find_keyframe_index(&[0.0], 0.5);
+        assert_eq!(result, Some((0, 0, 0.0)));
+    }
+
+    #[test]
+    fn test_before_first_keyframe() {
+        let result = find_keyframe_index(&[1.0, 2.0, 3.0], 0.5);
+        assert_eq!(result, Some((0, 0, 0.0)));
+    }
+
+    #[test]
+    fn test_after_last_keyframe() {
+        let result = find_keyframe_index(&[1.0, 2.0, 3.0], 5.0);
+        assert_eq!(result, Some((2, 2, 0.0)));
+    }
+
+    #[test]
+    fn test_exact_keyframe() {
+        let result = find_keyframe_index(&[0.0, 1.0, 2.0], 1.0);
+        let (i0, i1, _t) = result.unwrap();
+        // At exact keyframe 1.0, should be in interval [1,2] with factor 0
+        assert_eq!(i0, 1);
+        assert_eq!(i1, 2);
+        assert!((result.unwrap().2).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_midpoint_interpolation() {
+        let result = find_keyframe_index(&[0.0, 2.0], 1.0);
+        let (i0, i1, t) = result.unwrap();
+        assert_eq!(i0, 0);
+        assert_eq!(i1, 1);
+        assert!((t - 0.5).abs() < 1e-5, "Expected factor ~0.5, got {t}");
+    }
+
+    #[test]
+    fn test_many_keyframes_binary_search() {
+        let times: Vec<f32> = (0..20).map(|i| i as f32).collect();
+        let result = find_keyframe_index(&times, 10.5);
+        let (i0, i1, t) = result.unwrap();
+        assert_eq!(i0, 10);
+        assert_eq!(i1, 11);
+        assert!((t - 0.5).abs() < 1e-5);
+    }
+
+    // ── lerp_vec3 ──
+
+    #[test]
+    fn test_lerp_vec3_zero() {
+        let a = DVec3::new(1.0, 2.0, 3.0);
+        let b = DVec3::new(4.0, 5.0, 6.0);
+        let result = lerp_vec3(a, b, 0.0);
+        assert!(approx_eq(result.x, 1.0));
+        assert!(approx_eq(result.y, 2.0));
+        assert!(approx_eq(result.z, 3.0));
+    }
+
+    #[test]
+    fn test_lerp_vec3_one() {
+        let a = DVec3::new(1.0, 2.0, 3.0);
+        let b = DVec3::new(4.0, 5.0, 6.0);
+        let result = lerp_vec3(a, b, 1.0);
+        assert!(approx_eq(result.x, 4.0));
+        assert!(approx_eq(result.y, 5.0));
+        assert!(approx_eq(result.z, 6.0));
+    }
+
+    #[test]
+    fn test_lerp_vec3_half() {
+        let a = DVec3::new(0.0, 0.0, 0.0);
+        let b = DVec3::new(10.0, 20.0, 30.0);
+        let result = lerp_vec3(a, b, 0.5);
+        assert!(approx_eq(result.x, 5.0));
+        assert!(approx_eq(result.y, 10.0));
+        assert!(approx_eq(result.z, 15.0));
+    }
+
+    // ── get_vec3 / get_quat ──
+
+    #[test]
+    fn test_get_vec3_index_zero() {
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let v = get_vec3(&values, 0);
+        assert_eq!(v, DVec3::new(1.0, 2.0, 3.0));
+    }
+
+    #[test]
+    fn test_get_vec3_index_one() {
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
+        let v = get_vec3(&values, 1);
+        assert_eq!(v, DVec3::new(4.0, 5.0, 6.0));
+    }
+
+    #[test]
+    fn test_get_quat_identity() {
+        // ORSB stores w, x, y, z → [1.0, 0.0, 0.0, 0.0]
+        let values = vec![1.0, 0.0, 0.0, 0.0];
+        let q = get_quat(&values, 0);
+        // from_xyzw(x=0, y=0, z=0, w=1) → identity
+        assert!(approx_eq(q.w, 1.0));
+        assert!(approx_eq(q.x, 0.0));
+        assert!(approx_eq(q.y, 0.0));
+        assert!(approx_eq(q.z, 0.0));
+    }
+
+    #[test]
+    fn test_get_quat_swizzle() {
+        // ORSB format: [w, x, y, z]
+        let values = vec![0.707, 0.0, 0.707, 0.0];
+        let q = get_quat(&values, 0);
+        // from_xyzw(values[1], values[2], values[3], values[0])
+        assert!(approx_eq(q.x, 0.0));
+        assert!(approx_eq(q.y, 0.707));
+        assert!(approx_eq(q.z, 0.0));
+        assert!(approx_eq(q.w, 0.707));
+    }
+
+    // ── slerp_quat ──
+
+    #[test]
+    fn test_slerp_zero() {
+        let a = DQuat::IDENTITY;
+        let b = DQuat::from_rotation_y(std::f64::consts::FRAC_PI_2);
+        let result = slerp_quat(a, b, 0.0);
+        assert!(approx_eq(result.w, a.w));
+        assert!(approx_eq(result.x, a.x));
+        assert!(approx_eq(result.y, a.y));
+        assert!(approx_eq(result.z, a.z));
+    }
+
+    #[test]
+    fn test_slerp_one() {
+        let a = DQuat::IDENTITY;
+        let b = DQuat::from_rotation_y(std::f64::consts::FRAC_PI_2);
+        let result = slerp_quat(a, b, 1.0);
+        assert!(approx_eq(result.w, b.w));
+        assert!(approx_eq(result.x, b.x));
+        assert!(approx_eq(result.y, b.y));
+        assert!(approx_eq(result.z, b.z));
+    }
+
+    #[test]
+    fn test_slerp_result_normalized() {
+        let a = DQuat::IDENTITY;
+        let b = DQuat::from_rotation_y(std::f64::consts::FRAC_PI_2);
+        for i in 0..=10 {
+            let t = i as f64 / 10.0;
+            let result = slerp_quat(a, b, t);
+            let len = (result.x * result.x + result.y * result.y
+                + result.z * result.z + result.w * result.w).sqrt();
+            assert!(approx_eq(len, 1.0), "Slerp result not normalized at t={t}: len={len}");
+        }
+    }
+
+    #[test]
+    fn test_slerp_nearly_identical() {
+        // When quaternions are very close, uses linear interpolation fallback
+        let a = DQuat::IDENTITY;
+        let b = DQuat::from_rotation_y(0.0001);
+        let result = slerp_quat(a, b, 0.5);
+        let len = (result.x * result.x + result.y * result.y
+            + result.z * result.z + result.w * result.w).sqrt();
+        assert!(approx_eq(len, 1.0), "Near-identity slerp not normalized: len={len}");
+    }
+
+    #[test]
+    fn test_slerp_shortest_path() {
+        // If dot < 0, should negate b to take shortest path
+        let a = DQuat::IDENTITY;
+        // Negate identity → same rotation but opposite hemisphere
+        let b = DQuat::from_xyzw(0.0, 0.0, 0.0, -1.0);
+        let result = slerp_quat(a, b, 0.5);
+        // Should interpolate along shortest path (staying near identity)
+        let len = (result.x * result.x + result.y * result.y
+            + result.z * result.z + result.w * result.w).sqrt();
+        assert!(approx_eq(len, 1.0));
+    }
+}

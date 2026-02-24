@@ -417,3 +417,186 @@ impl AppState {
             .collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    // ── Platform ──
+
+    #[test]
+    fn test_platform_supports_metal() {
+        assert!(Platform::MacOS.supports_metal());
+        assert!(!Platform::Linux.supports_metal());
+        assert!(!Platform::Windows.supports_metal());
+    }
+
+    #[test]
+    fn test_platform_supports_vulkan() {
+        assert!(Platform::Linux.supports_vulkan());
+        assert!(Platform::Windows.supports_vulkan());
+        assert!(!Platform::MacOS.supports_vulkan());
+    }
+
+    #[test]
+    fn test_platform_labels() {
+        assert_eq!(Platform::Linux.label(), "Linux");
+        assert_eq!(Platform::MacOS.label(), "macOS");
+        assert_eq!(Platform::Windows.label(), "Windows");
+    }
+
+    // ── Backend ──
+
+    #[test]
+    fn test_backend_available_on_linux() {
+        let backends = Backend::available_on(Platform::Linux);
+        assert!(backends.contains(&Backend::OpenGL));
+        assert!(backends.contains(&Backend::Vulkan));
+        assert!(backends.contains(&Backend::WebGPU));
+        assert!(backends.contains(&Backend::WasmExport));
+        assert!(!backends.contains(&Backend::Metal));
+    }
+
+    #[test]
+    fn test_backend_available_on_macos() {
+        let backends = Backend::available_on(Platform::MacOS);
+        assert!(backends.contains(&Backend::Metal));
+        assert!(!backends.contains(&Backend::Vulkan));
+    }
+
+    #[test]
+    fn test_backend_needs_build() {
+        assert!(!Backend::OpenGL.needs_build());
+        assert!(!Backend::Vulkan.needs_build());
+        assert!(Backend::Metal.needs_build());
+        assert!(Backend::WebGPU.needs_build());
+        assert!(Backend::WasmExport.needs_build());
+    }
+
+    #[test]
+    fn test_backend_labels() {
+        assert_eq!(Backend::OpenGL.label(), "OpenGL");
+        assert_eq!(Backend::Metal.label(), "Metal");
+    }
+
+    // ── Tab ──
+
+    #[test]
+    fn test_tab_all_count() {
+        assert_eq!(Tab::ALL.len(), 5);
+    }
+
+    #[test]
+    fn test_tab_next_wraps() {
+        assert_eq!(Tab::Tests.next(), Tab::Dashboard);
+    }
+
+    #[test]
+    fn test_tab_prev_wraps() {
+        assert_eq!(Tab::Dashboard.prev(), Tab::Tests);
+    }
+
+    #[test]
+    fn test_tab_next_prev_roundtrip() {
+        for tab in Tab::ALL {
+            assert_eq!(tab.next().prev(), *tab);
+        }
+    }
+
+    #[test]
+    fn test_tab_indices_unique() {
+        let indices: HashSet<usize> = Tab::ALL.iter().map(|t| t.index()).collect();
+        assert_eq!(indices.len(), Tab::ALL.len());
+    }
+
+    // ── ToolStatus ──
+
+    #[test]
+    fn test_tool_status_is_available() {
+        let found = ToolStatus::Found {
+            version: "1.0".into(),
+            path: PathBuf::from("/usr/bin/test"),
+        };
+        assert!(found.is_available());
+        assert!(!ToolStatus::NotFound.is_available());
+    }
+
+    // ── LogBuffer ──
+
+    #[test]
+    fn test_log_buffer_push() {
+        let mut buf = LogBuffer::new(100);
+        buf.push("hello".into(), false);
+        assert_eq!(buf.lines.len(), 1);
+        assert_eq!(buf.lines[0].text, "hello");
+    }
+
+    #[test]
+    fn test_log_buffer_max_lines_eviction() {
+        let mut buf = LogBuffer::new(3);
+        buf.push("a".into(), false);
+        buf.push("b".into(), false);
+        buf.push("c".into(), false);
+        buf.push("d".into(), false);
+        assert_eq!(buf.lines.len(), 3);
+        assert_eq!(buf.lines[0].text, "b");
+        assert_eq!(buf.lines[2].text, "d");
+    }
+
+    #[test]
+    fn test_log_buffer_clear() {
+        let mut buf = LogBuffer::new(100);
+        buf.push("test".into(), false);
+        buf.push("test2".into(), false);
+        buf.clear();
+        assert_eq!(buf.lines.len(), 0);
+        assert_eq!(buf.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_log_buffer_scroll_up_disables_auto_scroll() {
+        let mut buf = LogBuffer::new(100);
+        for i in 0..10 {
+            buf.push(format!("line {i}"), false);
+        }
+        assert!(buf.auto_scroll);
+        buf.scroll_up(3);
+        assert!(!buf.auto_scroll);
+    }
+
+    #[test]
+    fn test_log_buffer_scroll_to_top() {
+        let mut buf = LogBuffer::new(100);
+        for i in 0..10 {
+            buf.push(format!("line {i}"), false);
+        }
+        buf.scroll_to_top();
+        assert_eq!(buf.scroll_offset, 0);
+        assert!(!buf.auto_scroll);
+    }
+
+    #[test]
+    fn test_log_buffer_scroll_down_clamps() {
+        let mut buf = LogBuffer::new(100);
+        buf.push("only line".into(), false);
+        buf.scroll_to_top();
+        buf.scroll_down(1000);
+        assert_eq!(buf.scroll_offset, 0); // Only 1 line, so max offset is 0
+        assert!(buf.auto_scroll);
+    }
+
+    // ── SetupAction ──
+
+    #[test]
+    fn test_setup_action_all_count() {
+        assert_eq!(SetupAction::ALL.len(), 4);
+    }
+
+    #[test]
+    fn test_setup_action_labels_non_empty() {
+        for action in SetupAction::ALL {
+            assert!(!action.label().is_empty());
+        }
+    }
+}

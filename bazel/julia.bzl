@@ -54,10 +54,32 @@ def _julia_test_impl(ctx):
         output = runner,
         content = """#!/bin/bash
 set -e
-export JULIA_PROJECT="{project_dir}"
-{julia} --project="{project_dir}" "{test_file}"
+
+# Resolve the real workspace directory.
+# Julia's package depot is tied to the original source tree path,
+# so we must point Julia at the real workspace, not Bazel's runfiles copy.
+if [[ -n "${{BUILD_WORKSPACE_DIRECTORY}}" ]]; then
+    PROJECT_DIR="${{BUILD_WORKSPACE_DIRECTORY}}"
+elif [[ -n "${{TEST_SRCDIR}}" ]]; then
+    # Resolve the Project.toml symlink to find the real workspace root
+    REAL_TOML="$(readlink -f "${{TEST_SRCDIR}}/_main/{project_toml}")"
+    PROJECT_DIR="$(dirname "${{REAL_TOML}}")"
+else
+    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+    PROJECT_DIR="${{SCRIPT_DIR}}/{project_dir}"
+fi
+
+# Forward DISPLAY/WAYLAND_DISPLAY for tests that load GPU/windowing libraries
+export DISPLAY="${{DISPLAY:-:0}}"
+if [[ -n "${{WAYLAND_DISPLAY}}" ]]; then
+    export WAYLAND_DISPLAY
+fi
+
+export JULIA_PROJECT="${{PROJECT_DIR}}"
+{julia} --project="${{PROJECT_DIR}}" "${{PROJECT_DIR}}/{test_file}"
 """.format(
-            project_dir = project_toml.dirname,
+            project_dir = project_toml.dirname if project_toml.dirname else ".",
+            project_toml = project_toml.short_path,
             julia = ctx.attr.julia_bin,
             test_file = test_file.short_path,
         ),

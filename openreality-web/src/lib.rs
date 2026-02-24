@@ -4,6 +4,7 @@
 //! in the browser using WebGPU. Handles physics (via simplified solver),
 //! animation, skinning, particles, input, and audio.
 
+#[cfg(target_arch = "wasm32")]
 mod app;
 mod scene;
 mod transform;
@@ -12,9 +13,11 @@ mod skinning;
 mod particles;
 mod input;
 
+#[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
 /// Entry point — called when the WASM module loads.
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(start)]
 pub fn start() {
     console_error_panic_hook::set_once();
@@ -25,6 +28,7 @@ pub fn start() {
 /// Create a new application instance from an ORSB scene file.
 ///
 /// Called from JavaScript after fetching the .orsb binary data.
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub async fn create_app(canvas_id: String, scene_data: Vec<u8>) -> Result<app::App, JsValue> {
     let app = app::App::new(&canvas_id, &scene_data).await?;

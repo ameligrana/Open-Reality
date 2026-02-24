@@ -235,6 +235,11 @@ if !Sys.isapple()
 end
 
 # WebGPU backend (all platforms, requires compiled Rust FFI library)
+# Types are always defined (pure Julia structs); FFI/backend only loaded when library exists.
+include("backend/webgpu/webgpu_types.jl")
+export WebGPUGPUMesh, WebGPUGPUTexture, WebGPUFramebuffer,
+       WebGPUGBuffer, WebGPUGPUResourceCache, WebGPUTextureCache
+
 const _WEBGPU_LIB_NAME = Sys.iswindows() ? "openreality_wgpu.dll" :
     Sys.isapple() ? "libopenreality_wgpu.dylib" : "libopenreality_wgpu.so"
 # Check workspace root target (cargo workspace) and crate-local target
@@ -245,11 +250,9 @@ const _WEBGPU_LIB_CANDIDATES = [
     joinpath(@__DIR__, "..", "openreality-wgpu", "target", "debug", _WEBGPU_LIB_NAME),
 ]
 if any(isfile, _WEBGPU_LIB_CANDIDATES)
-    include("backend/webgpu/webgpu_types.jl")
     include("backend/webgpu/webgpu_ffi.jl")
     include("backend/webgpu/webgpu_backend.jl")
-    export WebGPUBackend, WebGPUGPUMesh, WebGPUGPUTexture, WebGPUFramebuffer,
-           WebGPUGBuffer, WebGPUGPUResourceCache, WebGPUTextureCache
+    export WebGPUBackend
 end
 
 # Rendering pipeline (after backend — uses backend types)

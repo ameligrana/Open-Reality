@@ -1,6 +1,8 @@
 # WASM web runtime — built via wasm-pack.
 # wasm-pack handles the full compilation + wasm-bindgen pipeline.
 
+load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
+
 genrule(
     name = "openreality_web_pkg",
     srcs = glob(["src/**/*.rs"]) + [
@@ -24,8 +26,29 @@ genrule(
         cp _bazel_pkg/openreality_web_bg.wasm $(@D)/openreality_web_bg.wasm
         rm -rf _bazel_pkg
     """,
-    tags = ["no-sandbox"],
+    tags = [
+        "manual",
+        "no-sandbox",
+    ],
     visibility = ["//visibility:public"],
+)
+
+# Library target for native testing (WASM deps are cfg-gated)
+rust_library(
+    name = "openreality_web_lib",
+    srcs = glob(["src/**/*.rs"]),
+    crate_name = "openreality_web",
+    deps = [
+        "//openreality-gpu-shared",
+        "@crates//:glam",
+        "@crates//:bytemuck",
+        "@crates//:log",
+    ],
+)
+
+rust_test(
+    name = "openreality-web-test",
+    crate = ":openreality_web_lib",
 )
 
 # Supplementary web assets

@@ -1,14 +1,3 @@
-mod app;
-mod build;
-mod cli;
-mod commands;
-mod detect;
-mod event;
-mod project;
-mod runner;
-mod state;
-mod ui;
-
 use std::io;
 
 use anyhow::Result;
@@ -19,8 +8,12 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use tokio::sync::mpsc;
 
-use event::AppEvent;
-use project::ProjectContext;
+use openreality_cli::app;
+use openreality_cli::cli;
+use openreality_cli::commands;
+use openreality_cli::event::{self, AppEvent};
+use openreality_cli::project::{self, ProjectContext};
+use openreality_cli::state;
 
 struct CleanupGuard;
 

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -37,7 +37,12 @@ pub struct ProjectContext {
 
 /// Detect project context from the current directory, walking up.
 pub fn detect_project_context() -> anyhow::Result<ProjectContext> {
-    let mut dir = std::env::current_dir()?;
+    detect_project_context_from(&std::env::current_dir()?)
+}
+
+/// Detect project context starting from a specific directory, walking up.
+pub fn detect_project_context_from(start: &Path) -> anyhow::Result<ProjectContext> {
+    let mut dir = start.to_path_buf();
     loop {
         // Check for engine dev: Project.toml + src/OpenReality.jl
         if dir.join("Project.toml").exists() && dir.join("src").join("OpenReality.jl").exists() {
@@ -68,5 +73,51 @@ pub fn detect_project_context() -> anyhow::Result<ProjectContext> {
                  To create a new project: orcli init <project-name>"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detect_engine_dev() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Project.toml"), "[deps]").unwrap();
+        let src_dir = dir.path().join("src");
+        std::fs::create_dir(&src_dir).unwrap();
+        std::fs::write(src_dir.join("OpenReality.jl"), "module OpenReality end").unwrap();
+
+        let ctx = detect_project_context_from(dir.path()).unwrap();
+        assert_eq!(ctx.kind, ProjectKind::EngineDev);
+        assert_eq!(ctx.project_root, dir.path());
+        assert!(ctx.config.is_none());
+    }
+
+    #[test]
+    fn test_detect_user_project() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".openreality");
+        std::fs::create_dir(&config_dir).unwrap();
+        std::fs::write(
+            config_dir.join("config.toml"),
+            "engine_path = \"/opt/openreality\"\n",
+        )
+        .unwrap();
+
+        let ctx = detect_project_context_from(dir.path()).unwrap();
+        assert_eq!(ctx.kind, ProjectKind::UserProject);
+        assert!(ctx.config.is_some());
+        assert_eq!(ctx.config.unwrap().engine_path, "/opt/openreality");
+    }
+
+    #[test]
+    fn test_detect_no_project() {
+        let dir = tempfile::tempdir().unwrap();
+        // Create a nested dir so pop() hits the tempdir root, not filesystem root
+        let nested = dir.path().join("a/b/c");
+        std::fs::create_dir_all(&nested).unwrap();
+        let result = detect_project_context_from(&nested);
+        assert!(result.is_err());
     }
 }

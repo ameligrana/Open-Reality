@@ -280,3 +280,190 @@ pub fn detect_all_backends(project_root: &Path, tools: &ToolSet, platform: Platf
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn mock_tool_found() -> ToolStatus {
+        ToolStatus::Found {
+            version: "1.0".into(),
+            path: PathBuf::from("/usr/bin/mock"),
+        }
+    }
+
+    fn mock_toolset_all_found() -> ToolSet {
+        ToolSet {
+            julia: mock_tool_found(),
+            cargo: mock_tool_found(),
+            swift: mock_tool_found(),
+            wasm_pack: mock_tool_found(),
+            vulkaninfo: mock_tool_found(),
+            glfw: LibraryStatus::Found,
+            opengl_dev: LibraryStatus::Found,
+        }
+    }
+
+    // ── check_backend_artifact ──
+
+    #[test]
+    fn test_opengl_not_needed() {
+        let dir = tempfile::tempdir().unwrap();
+        let status = check_backend_artifact(dir.path(), Backend::OpenGL, Platform::Linux);
+        assert_eq!(status, BuildStatus::NotNeeded);
+    }
+
+    #[test]
+    fn test_vulkan_not_needed() {
+        let dir = tempfile::tempdir().unwrap();
+        let status = check_backend_artifact(dir.path(), Backend::Vulkan, Platform::Linux);
+        assert_eq!(status, BuildStatus::NotNeeded);
+    }
+
+    #[test]
+    fn test_metal_not_built() {
+        let dir = tempfile::tempdir().unwrap();
+        let status = check_backend_artifact(dir.path(), Backend::Metal, Platform::MacOS);
+        assert_eq!(status, BuildStatus::NotBuilt);
+    }
+
+    #[test]
+    fn test_metal_built() {
+        let dir = tempfile::tempdir().unwrap();
+        let lib_dir = dir.path().join("metal_bridge/.build/release");
+        std::fs::create_dir_all(&lib_dir).unwrap();
+        std::fs::write(lib_dir.join("libMetalBridge.dylib"), b"fake").unwrap();
+        let status = check_backend_artifact(dir.path(), Backend::Metal, Platform::MacOS);
+        assert!(matches!(status, BuildStatus::Built { .. }));
+    }
+
+    #[test]
+    fn test_wasm_not_built() {
+        let dir = tempfile::tempdir().unwrap();
+        let status = check_backend_artifact(dir.path(), Backend::WasmExport, Platform::Linux);
+        assert_eq!(status, BuildStatus::NotBuilt);
+    }
+
+    #[test]
+    fn test_wasm_built() {
+        let dir = tempfile::tempdir().unwrap();
+        let pkg_dir = dir.path().join("openreality-web/pkg");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(pkg_dir.join("module.wasm"), b"fake").unwrap();
+        let status = check_backend_artifact(dir.path(), Backend::WasmExport, Platform::Linux);
+        assert!(matches!(status, BuildStatus::Built { .. }));
+    }
+
+    // ── check_julia_packages ──
+
+    #[test]
+    fn test_julia_packages_no_project_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(check_julia_packages(dir.path()), None);
+    }
+
+    #[test]
+    fn test_julia_packages_no_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Project.toml"), "").unwrap();
+        assert_eq!(check_julia_packages(dir.path()), Some(false));
+    }
+
+    #[test]
+    fn test_julia_packages_both_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("Project.toml"), "").unwrap();
+        std::fs::write(dir.path().join("Manifest.toml"), "").unwrap();
+        assert_eq!(check_julia_packages(dir.path()), Some(true));
+    }
+
+    // ── check_deps_for_backend ──
+
+    #[test]
+    fn test_deps_opengl_with_tools() {
+        let tools = mock_toolset_all_found();
+        assert!(check_deps_for_backend(Backend::OpenGL, &tools, Platform::Linux));
+    }
+
+    #[test]
+    fn test_deps_opengl_no_julia() {
+        let mut tools = mock_toolset_all_found();
+        tools.julia = ToolStatus::NotFound;
+        assert!(!check_deps_for_backend(Backend::OpenGL, &tools, Platform::Linux));
+    }
+
+    #[test]
+    fn test_deps_metal_on_linux() {
+        let tools = mock_toolset_all_found();
+        assert!(!check_deps_for_backend(Backend::Metal, &tools, Platform::Linux));
+    }
+
+    #[test]
+    fn test_deps_metal_on_macos() {
+        let tools = mock_toolset_all_found();
+        assert!(check_deps_for_backend(Backend::Metal, &tools, Platform::MacOS));
+    }
+
+    #[test]
+    fn test_deps_webgpu() {
+        let tools = mock_toolset_all_found();
+        assert!(check_deps_for_backend(Backend::WebGPU, &tools, Platform::Linux));
+    }
+
+    #[test]
+    fn test_deps_wasm() {
+        let tools = mock_toolset_all_found();
+        assert!(check_deps_for_backend(Backend::WasmExport, &tools, Platform::Linux));
+    }
+
+    #[test]
+    fn test_deps_wasm_no_wasm_pack() {
+        let mut tools = mock_toolset_all_found();
+        tools.wasm_pack = ToolStatus::NotFound;
+        assert!(!check_deps_for_backend(Backend::WasmExport, &tools, Platform::Linux));
+    }
+
+    // ── discover_examples ──
+
+    #[test]
+    fn test_discover_examples_empty_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let examples = discover_examples(dir.path());
+        assert!(examples.is_empty());
+    }
+
+    #[test]
+    fn test_discover_examples_finds_jl_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let examples_dir = dir.path().join("examples");
+        std::fs::create_dir(&examples_dir).unwrap();
+        std::fs::write(examples_dir.join("basic.jl"), "# Basic scene\nprintln()").unwrap();
+        let examples = discover_examples(dir.path());
+        assert_eq!(examples.len(), 1);
+        assert_eq!(examples[0].filename, "basic.jl");
+        assert_eq!(examples[0].description, "Basic scene");
+    }
+
+    #[test]
+    fn test_discover_examples_skips_underscore() {
+        let dir = tempfile::tempdir().unwrap();
+        let examples_dir = dir.path().join("examples");
+        std::fs::create_dir(&examples_dir).unwrap();
+        std::fs::write(examples_dir.join("_private.jl"), "").unwrap();
+        std::fs::write(examples_dir.join("public.jl"), "").unwrap();
+        let examples = discover_examples(dir.path());
+        assert_eq!(examples.len(), 1);
+        assert_eq!(examples[0].filename, "public.jl");
+    }
+
+    #[test]
+    fn test_discover_examples_detects_metal_backend() {
+        let dir = tempfile::tempdir().unwrap();
+        let examples_dir = dir.path().join("examples");
+        std::fs::create_dir(&examples_dir).unwrap();
+        std::fs::write(examples_dir.join("metal.jl"), "render(scene, MetalBackend())").unwrap();
+        let examples = discover_examples(dir.path());
+        assert_eq!(examples[0].required_backend, Some(Backend::Metal));
+    }
+}
